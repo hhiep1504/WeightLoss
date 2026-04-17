@@ -24,6 +24,7 @@ ChartJS.register(
 
 const STORAGE_KEY = 'weight-loss-daily-entries-v1'
 const PROFILE_STORAGE_KEY = 'weight-loss-user-profile-v1'
+const REAL_DATA_SNAPSHOT_KEY = 'weight-loss-real-data-snapshot-v1'
 const BACKTEST_HORIZON_DAYS = 7
 const BACKTEST_MIN_TRAIN_DAYS = 28
 
@@ -405,6 +406,73 @@ const buildOlsForecast = (entries) => {
   }
 }
 
+const buildMechanisticForecast = (entries, profile) => {
+  if (entries.length < 7) {
+    return {
+      next90: [],
+      trendPerDay: null,
+      predicted30d: null,
+    }
+  }
+
+  const latestWeight = entries[entries.length - 1].weight
+  const maintenanceBase = getMaintenanceCalories(latestWeight, profile) ?? latestWeight * 31
+  const recentWithCalories = entries
+    .slice(-28)
+    .filter(
+      (entry) =>
+        Number.isFinite(entry.calories) && entry.calories >= 700 && entry.calories <= 6000,
+    )
+
+  let intakeEstimate = maintenanceBase
+  if (recentWithCalories.length >= 8) {
+    intakeEstimate =
+      recentWithCalories.reduce((sum, entry) => sum + entry.calories, 0) /
+      recentWithCalories.length
+  } else {
+    const recentTrendModel = calculateOlsModel(entries.slice(-21).map((entry) => entry.weight))
+    const inferredTrend = recentTrendModel ? recentTrendModel.slope : 0
+    intakeEstimate = maintenanceBase + inferredTrend * 7700
+  }
+
+  intakeEstimate = clamp(intakeEstimate, 900, 6000)
+
+  const next90 = []
+  let simulatedWeight = latestWeight
+  const adaptationPerKg = 12
+
+  for (let horizon = 1; horizon <= 90; horizon += 1) {
+    const sourceDate = new Date(entries[entries.length - 1].date)
+    sourceDate.setDate(sourceDate.getDate() + horizon)
+
+    const adherenceDrift = 1 - Math.exp(-horizon / 55)
+    const effectiveIntake = intakeEstimate + (maintenanceBase - intakeEstimate) * adherenceDrift * 0.35
+
+    const adaptation = Math.max(0, (latestWeight - simulatedWeight) * adaptationPerKg)
+    const effectiveMaintenance = maintenanceBase - adaptation
+    const kcalDelta = effectiveIntake - effectiveMaintenance
+    const dayDeltaKg = clamp(kcalDelta / 7700, -0.16, 0.16)
+
+    simulatedWeight += dayDeltaKg
+
+    next90.push({
+      date: toIsoDate(sourceDate),
+      weight: Number(simulatedWeight.toFixed(2)),
+    })
+  }
+
+  const trendPerDay =
+    next90.length >= 7
+      ? (next90[6].weight - latestWeight) / 7
+      : null
+
+  return {
+    next90,
+    trendPerDay: trendPerDay === null ? null : Number(trendPerDay.toFixed(4)),
+    predicted30d: next90[29] ? next90[29].weight : null,
+  }
+}
+
 const evaluateModelBacktest = (entries, profile) => {
   if (entries.length < BACKTEST_MIN_TRAIN_DAYS + BACKTEST_HORIZON_DAYS + 2) {
     return null
@@ -418,6 +486,7 @@ const evaluateModelBacktest = (entries, profile) => {
   )
 
   const hybridAbsErrors = []
+  const mechanisticAbsErrors = []
   const olsAbsErrors = []
   let hybrid80Covered = 0
   let windows = 0
@@ -430,16 +499,19 @@ const evaluateModelBacktest = (entries, profile) => {
     }
 
     const hybrid = buildHybridForecast(train, profile)
+    const mechanistic = buildMechanisticForecast(train, profile)
     const ols = buildOlsForecast(train)
     const hybridPred = hybrid.next90?.[BACKTEST_HORIZON_DAYS - 1]
+    const mechanisticPred = mechanistic.next90?.[BACKTEST_HORIZON_DAYS - 1]
     const olsPred = ols.next90?.[BACKTEST_HORIZON_DAYS - 1]
 
-    if (!hybridPred || !olsPred) {
+    if (!hybridPred || !mechanisticPred || !olsPred) {
       continue
     }
 
     windows += 1
     hybridAbsErrors.push(Math.abs(actual - hybridPred.weight))
+    mechanisticAbsErrors.push(Math.abs(actual - mechanisticPred.weight))
     olsAbsErrors.push(Math.abs(actual - olsPred.weight))
 
     if (actual >= hybridPred.low80 && actual <= hybridPred.high80) {
@@ -452,26 +524,29 @@ const evaluateModelBacktest = (entries, profile) => {
   }
 
   const hybridMae = getMae(hybridAbsErrors)
+  const mechanisticMae = getMae(mechanisticAbsErrors)
   const olsMae = getMae(olsAbsErrors)
   const hybridCoverage80 = hybrid80Covered / windows
 
-  let recommendedModel = 'hybrid'
-  if (hybridMae !== null && olsMae !== null) {
-    if (hybridMae <= olsMae * 0.99) {
-      recommendedModel = 'hybrid'
-    } else if (olsMae <= hybridMae * 0.99) {
-      recommendedModel = 'ols'
-    } else {
-      recommendedModel = 'hybrid'
-    }
-  }
+  const ranking = [
+    { key: 'hybrid', mae: hybridMae },
+    { key: 'mechanistic', mae: mechanisticMae },
+    { key: 'ols', mae: olsMae },
+  ]
+    .filter((item) => item.mae !== null)
+    .sort((a, b) => a.mae - b.mae)
+
+  const recommendedModel = ranking[0]?.key ?? 'hybrid'
+  const alternateModel = ranking[1]?.key ?? (recommendedModel === 'hybrid' ? 'ols' : 'hybrid')
 
   return {
     windows,
     hybridMae,
+    mechanisticMae,
     olsMae,
     hybridCoverage80,
     recommendedModel,
+    alternateModel,
   }
 }
 
@@ -570,25 +645,61 @@ function App() {
     return buildOlsForecast(entries)
   }, [entries])
 
+  const mechanisticForecast = useMemo(() => {
+    return buildMechanisticForecast(entries, profile)
+  }, [entries, profile])
+
   const modelBacktest = useMemo(() => {
     return evaluateModelBacktest(entries, profile)
   }, [entries, profile])
 
   const activeModelKey = modelBacktest?.recommendedModel ?? 'hybrid'
-  const activeForecast = activeModelKey === 'ols'
-    ? {
-        next90: olsForecast.next90,
-        trendPerDay: olsForecast.trendPerDay,
-        predicted30d: olsForecast.predicted30d,
-        predicted30dLow95: null,
-        predicted30dHigh95: null,
-        calorieEffectPerDay: null,
+  const activeForecast =
+    activeModelKey === 'ols'
+      ? {
+          next90: olsForecast.next90,
+          trendPerDay: olsForecast.trendPerDay,
+          predicted30d: olsForecast.predicted30d,
+          predicted30dLow95: null,
+          predicted30dHigh95: null,
+          calorieEffectPerDay: null,
+          label: 'OLS baseline',
+        }
+      : activeModelKey === 'mechanistic'
+        ? {
+            next90: mechanisticForecast.next90,
+            trendPerDay: mechanisticForecast.trendPerDay,
+            predicted30d: mechanisticForecast.predicted30d,
+            predicted30dLow95: null,
+            predicted30dHigh95: null,
+            calorieEffectPerDay: null,
+            label: 'Dynamic energy balance',
+          }
+        : {
+            ...forecast,
+            label: 'Hybrid forecast',
+          }
+
+  const getForecastByKey = (key) => {
+    if (key === 'ols') {
+      return {
         label: 'OLS baseline',
+        next90: olsForecast.next90,
       }
-    : {
-        ...forecast,
-        label: 'Hybrid forecast',
+    }
+
+    if (key === 'mechanistic') {
+      return {
+        label: 'Dynamic energy balance',
+        next90: mechanisticForecast.next90,
       }
+    }
+
+    return {
+      label: 'Hybrid forecast',
+      next90: forecast.next90,
+    }
+  }
 
   const goalProjection = useMemo(() => {
     const targetWeight = toOptionalPositiveNumber(profile.targetWeight)
@@ -670,20 +781,13 @@ function App() {
       ...activeForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
 
-    const olsPredictionPoints = [
+    const alternateKey = modelBacktest?.alternateModel ?? (activeModelKey === 'hybrid' ? 'ols' : 'hybrid')
+    const alternateForecast = getForecastByKey(alternateKey)
+    const alternatePredictionPoints = [
       ...Array.from({ length: entries.length - 1 }, () => null),
       entries.length > 0 ? entries[entries.length - 1].weight : null,
-      ...olsForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
+      ...alternateForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
-
-    const hybridPredictionPoints = [
-      ...Array.from({ length: entries.length - 1 }, () => null),
-      entries.length > 0 ? entries[entries.length - 1].weight : null,
-      ...forecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
-    ]
-
-    const comparisonLabel = activeModelKey === 'hybrid' ? 'OLS baseline' : 'Hybrid forecast'
-    const comparisonPoints = activeModelKey === 'hybrid' ? olsPredictionPoints : hybridPredictionPoints
 
     const targetWeightLine =
       goalProjection.targetWeight !== null
@@ -729,8 +833,8 @@ function App() {
         ...(showOlsComparison
           ? [
               {
-                label: comparisonLabel,
-                data: comparisonPoints,
+                label: `${alternateForecast.label} (alternate)`,
+                data: alternatePredictionPoints,
                 borderColor: '#2563eb',
                 backgroundColor: '#2563eb',
                 borderDash: [3, 4],
@@ -769,7 +873,7 @@ function App() {
           : []),
       ],
     }
-  }, [entries, forecast, goalProjection, projectionWindowDays, olsForecast, showOlsComparison, activeForecast, activeModelKey])
+  }, [entries, forecast, goalProjection, projectionWindowDays, olsForecast, showOlsComparison, activeForecast, activeModelKey, modelBacktest, mechanisticForecast])
 
   const chartOptions = {
     responsive: true,
@@ -895,10 +999,48 @@ function App() {
     setEntries((previous) => previous.filter((entry) => entry.date !== date))
   }
 
+  const saveRealDataSnapshot = () => {
+    const payload = {
+      entries,
+      profile,
+      capturedAt: new Date().toISOString(),
+    }
+    localStorage.setItem(REAL_DATA_SNAPSHOT_KEY, JSON.stringify(payload))
+  }
+
   const useSyntheticDataset = () => {
+    saveRealDataSnapshot()
     const synthetic = generateSyntheticEntries(140)
     setEntries(synthetic)
-    setBackupMessage('Generated synthetic dataset (140 days) for model stress-testing.')
+    setBackupMessage('Generated synthetic dataset (140 days). You can use Reset to restore your real data snapshot.')
+  }
+
+  const resetToRealData = () => {
+    const snapshot = localStorage.getItem(REAL_DATA_SNAPSHOT_KEY)
+    if (!snapshot) {
+      setBackupMessage('No real-data snapshot found yet. Generate synthetic data once to create one.')
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(snapshot)
+      const restoredEntries = normalizeEntries(parsed?.entries)
+      if (restoredEntries.length === 0) {
+        setBackupMessage('Snapshot exists but has no valid entries to restore.')
+        return
+      }
+
+      setEntries(restoredEntries)
+      setProfile({
+        age: parsed?.profile?.age ?? '',
+        heightCm: parsed?.profile?.heightCm ?? '',
+        sex: parsed?.profile?.sex ?? '',
+        targetWeight: parsed?.profile?.targetWeight ?? '',
+      })
+      setBackupMessage('Restored your real dataset from snapshot.')
+    } catch {
+      setBackupMessage('Could not restore snapshot. It may be corrupted.')
+    }
   }
 
   const exportToJson = () => {
@@ -1140,12 +1282,12 @@ function App() {
           </p>
           <small>
             {modelBacktest
-              ? `Hybrid MAE: ${modelBacktest.hybridMae.toFixed(2)} kg | OLS MAE: ${modelBacktest.olsMae.toFixed(2)} kg`
+              ? `Hybrid MAE: ${modelBacktest.hybridMae.toFixed(2)} kg | Dynamic MAE: ${modelBacktest.mechanisticMae.toFixed(2)} kg | OLS MAE: ${modelBacktest.olsMae.toFixed(2)} kg`
               : 'Need more history for rolling backtest'}
           </small>
           <small>
             {modelBacktest
-              ? `Hybrid 80% coverage: ${(modelBacktest.hybridCoverage80 * 100).toFixed(1)}% | Active: ${activeForecast.label}`
+              ? `Hybrid 80% coverage: ${(modelBacktest.hybridCoverage80 * 100).toFixed(1)}% | Active model: ${activeForecast.label}`
               : 'Backtest starts after enough historical entries are available'}
           </small>
         </article>
@@ -1171,7 +1313,7 @@ function App() {
       <section className="panel chart-panel">
         <h2>Trend & Forecast Chart</h2>
         <p className="chart-subtitle">
-          Forecast is auto-selected from backtest performance. Comparison mode lets you inspect the alternate model.
+          Forecast is auto-selected from rolling backtest performance. Comparison mode shows the strongest alternate model.
         </p>
         <div className="chart-controls">
           <button
@@ -1183,7 +1325,7 @@ function App() {
           </button>
           {showOlsComparison ? (
             <p className="chart-hint">
-              Active: {activeForecast.label}. Blue overlay shows the alternate model.
+              Active: {activeForecast.label}. Blue overlay shows the alternate challenger from backtest ranking.
             </p>
           ) : null}
         </div>
@@ -1223,6 +1365,9 @@ function App() {
         <div className="backup-actions">
           <button type="button" className="ghost-button" onClick={useSyntheticDataset}>
             Generate Synthetic Data (140 days)
+          </button>
+          <button type="button" className="ghost-button" onClick={resetToRealData}>
+            Reset to Real Data
           </button>
         </div>
       </section>
