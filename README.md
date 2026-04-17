@@ -55,6 +55,18 @@ Add these repository secrets before deploying:
 
 The workflow injects these values only at build time on GitHub Actions.
 
+### Supabase Auth Redirect For GitHub Pages
+
+If local works but GitHub Pages login fails, set these in Supabase:
+
+1. Supabase Dashboard -> Authentication -> URL Configuration.
+2. Set Site URL to your GitHub Pages URL.
+3. Add Redirect URLs:
+	- `https://<username>.github.io/<repo>/`
+	- `https://<username>.github.io/<repo>`
+
+Then run a new deploy (push a commit) so the latest build uses your secrets.
+
 ## Optional Free Cloud Sync (Supabase)
 
 This app supports free cloud sync so you can open it on different devices and keep the same data.
