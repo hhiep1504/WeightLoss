@@ -500,7 +500,7 @@ function App() {
       </section>
 
       <section className="panel backup-panel">
-        <h2>Backup & Restore</h2>
+        <h2>Backup and Restore</h2>
         <p className="backup-note">
           Export a JSON backup anytime, then import it later to restore your entries in this browser.
         </p>
