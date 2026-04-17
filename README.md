@@ -45,6 +45,16 @@ Workflow file:
 
 - .github/workflows/deploy.yml
 
+### If You Want Cloud Sync On GitHub Domain
+
+Add these repository secrets before deploying:
+
+1. Go to Settings -> Secrets and variables -> Actions.
+2. Create secret `VITE_SUPABASE_URL` with your Supabase project URL.
+3. Create secret `VITE_SUPABASE_ANON_KEY` with your Supabase anon key.
+
+The workflow injects these values only at build time on GitHub Actions.
+
 ## Optional Free Cloud Sync (Supabase)
 
 This app supports free cloud sync so you can open it on different devices and keep the same data.
