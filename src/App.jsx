@@ -23,6 +23,13 @@ ChartJS.register(
 )
 
 const STORAGE_KEY = 'weight-loss-daily-entries-v1'
+const PROFILE_STORAGE_KEY = 'weight-loss-user-profile-v1'
+
+const defaultProfile = {
+  age: '',
+  heightCm: '',
+  sex: '',
+}
 
 const toIsoDate = (value) => {
   const date = new Date(value)
@@ -57,14 +64,19 @@ const normalizeEntries = (rawEntries) => {
   rawEntries.forEach((entry) => {
     const date = toIsoDate(entry?.date)
     const weight = Number(entry?.weight)
+    const calories = Number(entry?.calories)
 
     if (!date || !Number.isFinite(weight) || weight <= 0) {
       return
     }
 
+    const normalizedCalories =
+      Number.isFinite(calories) && calories > 0 ? Math.round(calories) : null
+
     normalizedMap.set(date, {
       date,
       weight: Number(weight.toFixed(2)),
+      calories: normalizedCalories,
     })
   })
 
@@ -73,34 +85,132 @@ const normalizeEntries = (rawEntries) => {
   )
 }
 
-const linearRegression = (values) => {
-  const n = values.length
-  if (n < 2) {
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max)
+
+const toOptionalPositiveNumber = (value) => {
+  if (value === '' || value === null || value === undefined) {
     return null
   }
 
-  let sumX = 0
-  let sumY = 0
-  let sumXY = 0
-  let sumXX = 0
-
-  for (let i = 0; i < n; i += 1) {
-    const x = i
-    const y = values[i]
-    sumX += x
-    sumY += y
-    sumXY += x * y
-    sumXX += x * x
-  }
-
-  const denominator = n * sumXX - sumX * sumX
-  if (denominator === 0) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
     return null
   }
 
-  const slope = (n * sumXY - sumX * sumY) / denominator
-  const intercept = (sumY - slope * sumX) / n
-  return { slope, intercept }
+  return parsed
+}
+
+const getMaintenanceCalories = (weightKg, profile) => {
+  const age = toOptionalPositiveNumber(profile.age)
+  const heightCm = toOptionalPositiveNumber(profile.heightCm)
+  const sex = profile.sex
+
+  if (!age || !heightCm || !sex) {
+    return null
+  }
+
+  const sexAdjustment = sex === 'male' ? 5 : sex === 'female' ? -161 : 0
+  const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexAdjustment
+  const maintenance = bmr * 1.4
+
+  return Number.isFinite(maintenance) && maintenance > 0 ? maintenance : null
+}
+
+const estimateDailyCalorieEffect = (entries, profile) => {
+  if (entries.length === 0) {
+    return 0
+  }
+
+  const latestWeight = entries[entries.length - 1].weight
+  const maintenanceCalories = getMaintenanceCalories(latestWeight, profile)
+  if (!maintenanceCalories) {
+    return 0
+  }
+
+  const recentWithCalories = entries
+    .slice(-14)
+    .filter(
+      (entry) =>
+        Number.isFinite(entry.calories) && entry.calories >= 600 && entry.calories <= 6000,
+    )
+
+  if (recentWithCalories.length < 5) {
+    return 0
+  }
+
+  const avgCalories =
+    recentWithCalories.reduce((sum, entry) => sum + entry.calories, 0) /
+    recentWithCalories.length
+  const kcalDeltaPerDay = avgCalories - maintenanceCalories
+  const kgEffectPerDay = kcalDeltaPerDay / 7700
+
+  return clamp(kgEffectPerDay, -0.25, 0.25)
+}
+
+const buildHybridForecast = (entries, profile) => {
+  if (entries.length < 4) {
+    return {
+      next7: [],
+      trendPerDay: null,
+      calorieEffectPerDay: null,
+      predicted30d: null,
+      predicted30dLow95: null,
+      predicted30dHigh95: null,
+    }
+  }
+
+  const weights = entries.map((entry) => entry.weight)
+  let level = weights[0]
+  let trend = weights[1] - weights[0]
+
+  const alpha = 0.35
+  const beta = 0.12
+  const residuals = []
+
+  for (let i = 1; i < weights.length; i += 1) {
+    const predicted = level + trend
+    residuals.push(weights[i] - predicted)
+
+    const prevLevel = level
+    level = alpha * weights[i] + (1 - alpha) * (level + trend)
+    trend = beta * (level - prevLevel) + (1 - beta) * trend
+  }
+
+  const mse =
+    residuals.length > 0
+      ? residuals.reduce((sum, value) => sum + value * value, 0) / residuals.length
+      : 0.06
+  const sigma = Math.max(0.15, Math.sqrt(mse))
+  const calorieEffectPerDay = estimateDailyCalorieEffect(entries, profile)
+  const totalTrendPerDay = trend + calorieEffectPerDay
+
+  const next7 = []
+  for (let horizon = 1; horizon <= 7; horizon += 1) {
+    const sourceDate = new Date(entries[entries.length - 1].date)
+    sourceDate.setDate(sourceDate.getDate() + horizon)
+
+    const predictedWeight = level + trend * horizon + calorieEffectPerDay * horizon
+    const std = sigma * Math.sqrt(horizon)
+
+    next7.push({
+      date: toIsoDate(sourceDate),
+      weight: Number(predictedWeight.toFixed(2)),
+      low80: Number((predictedWeight - 1.28 * std).toFixed(2)),
+      high80: Number((predictedWeight + 1.28 * std).toFixed(2)),
+    })
+  }
+
+  const predicted30d = level + trend * 30 + calorieEffectPerDay * 30
+  const std30 = sigma * Math.sqrt(30)
+
+  return {
+    next7,
+    trendPerDay: totalTrendPerDay,
+    calorieEffectPerDay,
+    predicted30d: Number(predicted30d.toFixed(2)),
+    predicted30dLow95: Number((predicted30d - 1.96 * std30).toFixed(2)),
+    predicted30dHigh95: Number((predicted30d + 1.96 * std30).toFixed(2)),
+  }
 }
 
 function App() {
@@ -108,7 +218,9 @@ function App() {
   const [form, setForm] = useState({
     date: todayIso,
     weight: '',
+    calories: '',
   })
+  const [profile, setProfile] = useState(defaultProfile)
   const [error, setError] = useState('')
   const [backupMessage, setBackupMessage] = useState('')
   const fileInputRef = useRef(null)
@@ -128,8 +240,30 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const savedProfile = localStorage.getItem(PROFILE_STORAGE_KEY)
+    if (!savedProfile) {
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(savedProfile)
+      setProfile({
+        age: parsed?.age ?? '',
+        heightCm: parsed?.heightCm ?? '',
+        sex: parsed?.sex ?? '',
+      })
+    } catch {
+      setProfile(defaultProfile)
+    }
+  }, [])
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries))
   }, [entries])
+
+  useEffect(() => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile))
+  }, [profile])
 
   const stats = useMemo(() => {
     if (entries.length === 0) {
@@ -142,6 +276,11 @@ function App() {
 
     const latest = entries[entries.length - 1]
     const avg = entries.reduce((sum, item) => sum + item.weight, 0) / entries.length
+    const withCalories = entries.filter((item) => Number.isFinite(item.calories))
+    const avgCalories =
+      withCalories.length > 0
+        ? withCalories.reduce((sum, item) => sum + item.calories, 0) / withCalories.length
+        : null
 
     let delta7d = null
     if (entries.length >= 2) {
@@ -154,50 +293,13 @@ function App() {
       latest,
       delta7d,
       avg,
+      avgCalories,
     }
   }, [entries])
 
   const forecast = useMemo(() => {
-    if (entries.length < 4) {
-      return {
-        next7: [],
-        trendPerDay: null,
-        predicted30d: null,
-      }
-    }
-
-    const model = linearRegression(entries.map((entry) => entry.weight))
-    if (!model) {
-      return {
-        next7: [],
-        trendPerDay: null,
-        predicted30d: null,
-      }
-    }
-
-    const { slope, intercept } = model
-    const next7 = []
-    const baseLength = entries.length
-
-    for (let i = 0; i < 7; i += 1) {
-      const sourceDate = new Date(entries[entries.length - 1].date)
-      sourceDate.setDate(sourceDate.getDate() + i + 1)
-      const futureWeight = slope * (baseLength + i) + intercept
-
-      next7.push({
-        date: toIsoDate(sourceDate),
-        weight: Number(futureWeight.toFixed(2)),
-      })
-    }
-
-    const predicted30d = Number((slope * (baseLength + 29) + intercept).toFixed(2))
-
-    return {
-      next7,
-      trendPerDay: slope,
-      predicted30d,
-    }
-  }, [entries])
+    return buildHybridForecast(entries, profile)
+  }, [entries, profile])
 
   const chartData = useMemo(() => {
     const labels = [
@@ -326,6 +428,7 @@ function App() {
 
     const date = toIsoDate(form.date)
     const weight = Number(form.weight)
+    const calories = toOptionalPositiveNumber(form.calories)
 
     if (!date) {
       setError('Invalid date. Please choose a valid day.')
@@ -344,6 +447,7 @@ function App() {
         {
           date,
           weight,
+          calories,
         },
       ])
     })
@@ -351,6 +455,7 @@ function App() {
     setForm((previous) => ({
       ...previous,
       weight: '',
+      calories: '',
     }))
   }
 
@@ -362,6 +467,7 @@ function App() {
     const payload = {
       version: 1,
       exportedAt: new Date().toISOString(),
+      profile,
       entries,
     }
 
@@ -377,7 +483,7 @@ function App() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    setBackupMessage('Da export file JSON thanh cong.')
+    setBackupMessage('JSON backup exported successfully.')
   }
 
   const importFromJson = async (event) => {
@@ -391,6 +497,7 @@ function App() {
       const parsed = JSON.parse(text)
       const sourceEntries = Array.isArray(parsed) ? parsed : parsed?.entries
       const normalized = normalizeEntries(sourceEntries)
+      const importedProfile = parsed?.profile
 
       if (normalized.length === 0) {
         setBackupMessage('No valid entries found in this file.')
@@ -398,6 +505,13 @@ function App() {
       }
 
       setEntries(normalized)
+      if (importedProfile && typeof importedProfile === 'object') {
+        setProfile({
+          age: importedProfile.age ?? '',
+          heightCm: importedProfile.heightCm ?? '',
+          sex: importedProfile.sex ?? '',
+        })
+      }
       setBackupMessage(`Imported ${normalized.length} entries from JSON.`)
     } catch {
       setBackupMessage('Could not read this JSON file. Please check the format.')
@@ -446,9 +560,70 @@ function App() {
             />
           </label>
 
+          <label>
+            Calories (optional)
+            <input
+              type="number"
+              step="1"
+              min="0"
+              placeholder="e.g. 1950"
+              value={form.calories}
+              onChange={(event) =>
+                setForm((previous) => ({ ...previous, calories: event.target.value }))
+              }
+            />
+          </label>
+
           <button type="submit">Save Entry</button>
         </form>
         {error ? <p className="error">{error}</p> : null}
+      </section>
+
+      <section className="panel">
+        <h2>Profile (Optional but Helpful)</h2>
+        <div className="profile-grid">
+          <label>
+            Age
+            <input
+              type="number"
+              min="1"
+              max="120"
+              placeholder="e.g. 30"
+              value={profile.age}
+              onChange={(event) =>
+                setProfile((previous) => ({ ...previous, age: event.target.value }))
+              }
+            />
+          </label>
+
+          <label>
+            Height (cm)
+            <input
+              type="number"
+              min="50"
+              max="250"
+              placeholder="e.g. 170"
+              value={profile.heightCm}
+              onChange={(event) =>
+                setProfile((previous) => ({ ...previous, heightCm: event.target.value }))
+              }
+            />
+          </label>
+
+          <label>
+            Sex
+            <select
+              value={profile.sex}
+              onChange={(event) =>
+                setProfile((previous) => ({ ...previous, sex: event.target.value }))
+              }
+            >
+              <option value="">Prefer not to say</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </label>
+        </div>
       </section>
 
       <section className="stats-grid">
@@ -486,13 +661,30 @@ function App() {
               ? 'Need at least 4 records for forecasting'
               : `Trend: ${forecast.trendPerDay > 0 ? '+' : ''}${forecast.trendPerDay.toFixed(3)} kg/day`}
           </small>
+          {forecast.predicted30dLow95 !== null && forecast.predicted30dHigh95 !== null ? (
+            <small>
+              95% range: {forecast.predicted30dLow95.toFixed(2)} to {forecast.predicted30dHigh95.toFixed(2)} kg
+            </small>
+          ) : null}
+        </article>
+
+        <article className="stat-card">
+          <h3>Avg Logged Calories</h3>
+          <p className="value">
+            {stats.avgCalories === null ? '--' : `${Math.round(stats.avgCalories)} kcal`}
+          </p>
+          <small>
+            {forecast.calorieEffectPerDay === null
+              ? 'Add profile + calories to enable calorie effect'
+              : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
+          </small>
         </article>
       </section>
 
       <section className="panel chart-panel">
         <h2>Trend & Forecast Chart</h2>
         <p className="chart-subtitle">
-          Solid teal shows your actual logs. Dashed orange extends where your trend may go next.
+          Solid teal shows your actual logs. Dashed orange combines trend and optional calorie-based adjustment.
         </p>
         <div className="chart-wrap">
           <Line data={chartData} options={chartOptions} />
@@ -533,7 +725,14 @@ function App() {
               .reverse()
               .map((entry) => (
                 <li key={entry.date}>
-                  <span>{formatDate(entry.date)}</span>
+                  <div className="entry-meta">
+                    <span>{formatDate(entry.date)}</span>
+                    <small>
+                      {Number.isFinite(entry.calories)
+                        ? `${Math.round(entry.calories)} kcal`
+                        : 'Calories not logged'}
+                    </small>
+                  </div>
                   <strong>{entry.weight.toFixed(1)} kg</strong>
                   <button type="button" onClick={() => removeEntry(entry.date)}>
                     Delete

@@ -65,7 +65,29 @@
   font-size: 0.9rem;
 }
 
+.profile-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.profile-grid label {
+  display: grid;
+  gap: 0.38rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
 .entry-form input {
+  border: 1px solid #d5dbe4;
+  border-radius: 10px;
+  padding: 0.62rem 0.72rem;
+  font: inherit;
+  background: #fff;
+}
+
+.profile-grid input,
+.profile-grid select {
   border: 1px solid #d5dbe4;
   border-radius: 10px;
   padding: 0.62rem 0.72rem;
@@ -224,6 +246,16 @@
 
 .entry-list span {
   color: #334155;
+}
+
+.entry-meta {
+  display: grid;
+  gap: 0.14rem;
+}
+
+.entry-meta small {
+  color: #64748b;
+  font-size: 0.8rem;
 }
 
 .entry-list strong {
