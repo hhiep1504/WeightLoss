@@ -1,0 +1,262 @@
+.app-shell {
+  width: min(1040px, 92vw);
+  margin: 0 auto;
+  padding: 2.2rem 0 3rem;
+}
+
+.hero {
+  margin-bottom: 1.6rem;
+  padding: 2rem;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.65), transparent 32%),
+    radial-gradient(circle at 78% 78%, rgba(255, 200, 169, 0.7), transparent 42%),
+    linear-gradient(120deg, #f97316, #fb923c 56%, #fdba74);
+  box-shadow: 0 16px 40px rgba(124, 45, 18, 0.28);
+  color: #2f1300;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  letter-spacing: 0.2rem;
+  font-weight: 700;
+}
+
+.hero h1 {
+  margin: 0.5rem 0 0;
+  font-size: clamp(1.5rem, 2.6vw, 2.35rem);
+}
+
+.subhead {
+  margin: 0.6rem 0 0;
+  max-width: 62ch;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.panel {
+  border-radius: 16px;
+  padding: 1.1rem 1rem 1.2rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 7px 24px rgba(2, 8, 23, 0.08);
+  margin-bottom: 1rem;
+}
+
+.panel h2 {
+  margin: 0 0 0.9rem;
+  font-size: 1.14rem;
+}
+
+.entry-form {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  align-items: end;
+}
+
+.entry-form label {
+  display: grid;
+  gap: 0.38rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.entry-form input {
+  border: 1px solid #d5dbe4;
+  border-radius: 10px;
+  padding: 0.62rem 0.72rem;
+  font: inherit;
+  background: #fff;
+}
+
+.entry-form button,
+.entry-list button {
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.entry-form button {
+  min-height: 41px;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 700;
+  padding: 0.56rem 1rem;
+  transition: transform 180ms ease, filter 180ms ease;
+}
+
+.entry-form button:hover {
+  transform: translateY(-1px);
+  filter: brightness(0.98);
+}
+
+.error {
+  margin: 0.7rem 0 0;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.stat-card {
+  border-radius: 14px;
+  background: linear-gradient(154deg, #fff7ed, #ffffff 56%);
+  border: 1px solid #fed7aa;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  padding: 0.9rem;
+}
+
+.stat-card h3 {
+  margin: 0;
+  font-size: 0.93rem;
+  color: #7c2d12;
+}
+
+.stat-card .value {
+  margin: 0.35rem 0 0;
+  font-size: 1.42rem;
+  font-weight: 800;
+  color: #111827;
+}
+
+.stat-card small {
+  display: block;
+  margin-top: 0.2rem;
+  color: #475569;
+}
+
+.chart-panel {
+  padding-bottom: 0.6rem;
+}
+
+.chart-subtitle {
+  margin: -0.25rem 0 0.9rem;
+  color: #475569;
+  font-size: 0.94rem;
+}
+
+.chart-wrap {
+  height: 330px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
+  border: 1px solid #e2e8f0;
+  padding: 0.55rem 0.65rem 0.35rem;
+}
+
+.backup-note {
+  margin: 0 0 0.8rem;
+  color: #475569;
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.ghost-button {
+  border: 1px solid #94a3b8;
+  background: #f8fafc;
+  color: #0f172a;
+  font: inherit;
+  border-radius: 10px;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.ghost-button:hover {
+  background: #eef2ff;
+}
+
+.file-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.file-label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.backup-message {
+  margin: 0.75rem 0 0;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.empty {
+  margin: 0.2rem 0;
+  color: #64748b;
+}
+
+.entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.entry-list li {
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  padding: 0.58rem 0.74rem;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.entry-list span {
+  color: #334155;
+}
+
+.entry-list strong {
+  color: #0f172a;
+}
+
+.entry-list button {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 0.36rem 0.65rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.entry-list button:hover {
+  background: #fecaca;
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(1040px, 94vw);
+    padding-top: 1.2rem;
+  }
+
+  .hero {
+    padding: 1.3rem;
+  }
+
+  .entry-list li {
+    grid-template-columns: 1fr auto;
+  }
+
+  .entry-list button {
+    grid-column: 1 / -1;
+  }
+}
