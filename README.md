@@ -44,3 +44,31 @@ npm run preview
 Workflow file:
 
 - .github/workflows/deploy.yml
+
+## Optional Free Cloud Sync (Supabase)
+
+This app supports free cloud sync so you can open it on different devices and keep the same data.
+
+### 1) Create a free Supabase project
+
+1. Create a project at https://supabase.com.
+2. Open SQL Editor and run [supabase/schema.sql](supabase/schema.sql).
+
+### 2) Add environment variables
+
+Create a `.env` file in project root:
+
+```bash
+VITE_SUPABASE_URL=your_project_url
+VITE_SUPABASE_ANON_KEY=your_anon_key
+```
+
+You can copy from [.env.example](.env.example).
+
+### 3) Run app and sign in
+
+1. Start app with `npm run dev`.
+2. Use the Cloud Sync panel in-app.
+3. Enter your email and request a magic login link.
+
+Data remains local-first and syncs to cloud when signed in.

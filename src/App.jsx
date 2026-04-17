@@ -11,6 +11,7 @@ import {
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
 import './App.css'
+import { isSupabaseConfigured, supabase } from './lib/supabase'
 
 ChartJS.register(
   CategoryScale,
@@ -559,13 +560,23 @@ function App() {
   })
   const [profile, setProfile] = useState(defaultProfile)
   const [showOlsComparison, setShowOlsComparison] = useState(false)
+  const [cloudEmail, setCloudEmail] = useState('')
+  const [cloudSession, setCloudSession] = useState(null)
+  const [cloudStatus, setCloudStatus] = useState(
+    isSupabaseConfigured ? 'Cloud disconnected' : 'Cloud not configured',
+  )
+  const [entriesLoaded, setEntriesLoaded] = useState(false)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+  const [cloudHydrated, setCloudHydrated] = useState(false)
   const [error, setError] = useState('')
   const [backupMessage, setBackupMessage] = useState('')
   const fileInputRef = useRef(null)
+  const syncTimerRef = useRef(null)
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (!saved) {
+      setEntriesLoaded(true)
       return
     }
 
@@ -575,11 +586,14 @@ function App() {
     } catch {
       setEntries([])
     }
+
+    setEntriesLoaded(true)
   }, [])
 
   useEffect(() => {
     const savedProfile = localStorage.getItem(PROFILE_STORAGE_KEY)
     if (!savedProfile) {
+      setProfileLoaded(true)
       return
     }
 
@@ -594,6 +608,42 @@ function App() {
     } catch {
       setProfile(defaultProfile)
     }
+
+    setProfileLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      return
+    }
+
+    let isMounted = true
+
+    const bootSession = async () => {
+      const { data } = await supabase.auth.getSession()
+      if (!isMounted) {
+        return
+      }
+
+      const nextSession = data?.session ?? null
+      setCloudSession(nextSession)
+      setCloudStatus(nextSession ? 'Connected to cloud' : 'Cloud disconnected')
+    }
+
+    bootSession()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudSession(session)
+      setCloudHydrated(false)
+      setCloudStatus(session ? 'Connected to cloud' : 'Cloud disconnected')
+    })
+
+    return () => {
+      isMounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
@@ -603,6 +653,142 @@ function App() {
   useEffect(() => {
     localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile))
   }, [profile])
+
+  const mapCloudEntries = (rows) =>
+    normalizeEntries(
+      (rows ?? []).map((row) => ({
+        date: row.entry_date,
+        weight: row.weight,
+        calories: row.calories,
+      })),
+    )
+
+  const hydrateFromCloud = async (userId) => {
+    if (!supabase) {
+      return
+    }
+
+    setCloudStatus('Syncing from cloud...')
+
+    const [entriesRes, profileRes] = await Promise.all([
+      supabase
+        .from('entries')
+        .select('entry_date, weight, calories')
+        .eq('user_id', userId)
+        .order('entry_date', { ascending: true }),
+      supabase.from('profiles').select('age, height_cm, sex, target_weight').eq('user_id', userId).maybeSingle(),
+    ])
+
+    if (entriesRes.error) {
+      throw entriesRes.error
+    }
+
+    const cloudEntries = mapCloudEntries(entriesRes.data)
+    const mergedEntries = normalizeEntries([...entries, ...cloudEntries])
+    setEntries(mergedEntries)
+
+    if (profileRes.error && profileRes.error.code !== 'PGRST116') {
+      throw profileRes.error
+    }
+
+    if (profileRes.data) {
+      setProfile((previous) => ({
+        ...previous,
+        age: profileRes.data.age ?? previous.age,
+        heightCm: profileRes.data.height_cm ?? previous.heightCm,
+        sex: profileRes.data.sex ?? previous.sex,
+        targetWeight: profileRes.data.target_weight ?? previous.targetWeight,
+      }))
+    }
+
+    setCloudHydrated(true)
+    setCloudStatus('Cloud sync ready')
+  }
+
+  const syncToCloud = async (userId, nextEntries, nextProfile) => {
+    if (!supabase) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const entriesPayload = nextEntries.map((entry) => ({
+      user_id: userId,
+      entry_date: entry.date,
+      weight: entry.weight,
+      calories: entry.calories,
+      updated_at: timestamp,
+    }))
+
+    if (entriesPayload.length > 0) {
+      const { error: entriesError } = await supabase
+        .from('entries')
+        .upsert(entriesPayload, { onConflict: 'user_id,entry_date' })
+
+      if (entriesError) {
+        throw entriesError
+      }
+    }
+
+    const profilePayload = {
+      user_id: userId,
+      age: toOptionalPositiveNumber(nextProfile.age),
+      height_cm: toOptionalPositiveNumber(nextProfile.heightCm),
+      sex: nextProfile.sex || null,
+      target_weight: toOptionalPositiveNumber(nextProfile.targetWeight),
+      updated_at: timestamp,
+    }
+
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert(profilePayload, { onConflict: 'user_id' })
+
+    if (profileError) {
+      throw profileError
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !isSupabaseConfigured ||
+      !cloudSession?.user?.id ||
+      !entriesLoaded ||
+      !profileLoaded ||
+      cloudHydrated
+    ) {
+      return
+    }
+
+    hydrateFromCloud(cloudSession.user.id).catch((cloudError) => {
+      setCloudStatus(`Cloud sync error: ${cloudError.message}`)
+    })
+  }, [cloudSession?.user?.id, entriesLoaded, profileLoaded, cloudHydrated])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !cloudSession?.user?.id || !cloudHydrated) {
+      return
+    }
+
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current)
+    }
+
+    setCloudStatus('Sync pending...')
+    syncTimerRef.current = setTimeout(() => {
+      syncToCloud(cloudSession.user.id, entries, profile)
+        .then(() => {
+          setCloudStatus('Cloud synced')
+        })
+        .catch((cloudError) => {
+          setCloudStatus(`Cloud sync error: ${cloudError.message}`)
+        })
+    }, 700)
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current)
+      }
+    }
+  }, [entries, profile, cloudSession?.user?.id, cloudHydrated])
 
   const stats = useMemo(() => {
     if (entries.length === 0) {
@@ -999,6 +1185,38 @@ function App() {
     setEntries((previous) => previous.filter((entry) => entry.date !== date))
   }
 
+  const sendMagicLink = async () => {
+    if (!supabase || !cloudEmail.trim()) {
+      return
+    }
+
+    setCloudStatus('Sending magic link...')
+    const redirectTo = `${window.location.origin}${window.location.pathname}`
+
+    const { error: authError } = await supabase.auth.signInWithOtp({
+      email: cloudEmail.trim(),
+      options: {
+        emailRedirectTo: redirectTo,
+      },
+    })
+
+    if (authError) {
+      setCloudStatus(`Auth error: ${authError.message}`)
+      return
+    }
+
+    setCloudStatus('Magic link sent. Check your email.')
+  }
+
+  const signOutCloud = async () => {
+    if (!supabase) {
+      return
+    }
+
+    await supabase.auth.signOut()
+    setCloudStatus('Cloud disconnected')
+  }
+
   const saveRealDataSnapshot = () => {
     const payload = {
       entries,
@@ -1112,6 +1330,42 @@ function App() {
           Log your weight in seconds, follow your trend, and get a clear forecast for the next few weeks.
         </p>
       </header>
+
+      <section className="panel">
+        <h2>Cloud Sync (Free)</h2>
+        {!isSupabaseConfigured ? (
+          <p className="backup-note">
+            Cloud is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your env file to enable free sync.
+          </p>
+        ) : (
+          <>
+            <p className="backup-note">{cloudStatus}</p>
+            {cloudSession?.user ? (
+              <div className="backup-actions">
+                <span className="cloud-user">Signed in as {cloudSession.user.email}</span>
+                <button type="button" className="ghost-button" onClick={signOutCloud}>
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <div className="cloud-auth-grid">
+                <label>
+                  Email for magic link
+                  <input
+                    type="email"
+                    placeholder="you@example.com"
+                    value={cloudEmail}
+                    onChange={(event) => setCloudEmail(event.target.value)}
+                  />
+                </label>
+                <button type="button" className="ghost-button" onClick={sendMagicLink}>
+                  Send login link
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
 
       <section className="panel">
         <h2>Add New Entry</h2>

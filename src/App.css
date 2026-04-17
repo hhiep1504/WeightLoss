@@ -95,6 +95,33 @@
   background: #fff;
 }
 
+.cloud-auth-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: end;
+}
+
+.cloud-auth-grid label {
+  display: grid;
+  gap: 0.38rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.cloud-auth-grid input {
+  border: 1px solid #d5dbe4;
+  border-radius: 10px;
+  padding: 0.62rem 0.72rem;
+  font: inherit;
+  background: #fff;
+}
+
+.cloud-user {
+  font-weight: 700;
+  color: #0f172a;
+}
+
 .entry-form button,
 .entry-list button {
   border: 0;
@@ -311,5 +338,9 @@
 
   .entry-list button {
     grid-column: 1 / -1;
+  }
+
+  .cloud-auth-grid {
+    grid-template-columns: 1fr;
   }
 }
