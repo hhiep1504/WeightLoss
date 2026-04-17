@@ -24,6 +24,8 @@ ChartJS.register(
 
 const STORAGE_KEY = 'weight-loss-daily-entries-v1'
 const PROFILE_STORAGE_KEY = 'weight-loss-user-profile-v1'
+const BACKTEST_HORIZON_DAYS = 7
+const BACKTEST_MIN_TRAIN_DAYS = 28
 
 const defaultProfile = {
   age: '',
@@ -88,6 +90,61 @@ const normalizeEntries = (rawEntries) => {
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max)
 
+const randomNormal = () => {
+  const u = 1 - Math.random()
+  const v = Math.random()
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+}
+
+const generateSyntheticEntries = (days = 140) => {
+  const synthetic = []
+  const today = new Date()
+  const startDate = new Date(today)
+  startDate.setDate(today.getDate() - (days - 1))
+
+  let trueWeight = 83
+  const maintenance = 2450
+
+  for (let i = 0; i < days; i += 1) {
+    const date = new Date(startDate)
+    date.setDate(startDate.getDate() + i)
+
+    const progress = i / Math.max(1, days - 1)
+    let kcalDelta = -450
+    if (progress > 0.3) kcalDelta = -280
+    if (progress > 0.55) kcalDelta = -110
+    if (progress > 0.78) kcalDelta = 140
+
+    const adaptiveSlowdown = clamp((83 - trueWeight) * 12, 0, 180)
+    const effectiveDelta = kcalDelta + adaptiveSlowdown
+    trueWeight += effectiveDelta / 7700
+
+    const weeklyPattern = [0.18, 0.06, -0.08, -0.14, 0.02, 0.19, 0.24][date.getDay()]
+    const hydrationShock = Math.random() < 0.06 ? (Math.random() < 0.5 ? -0.7 : 0.7) : 0
+    const measurementNoise = randomNormal() * 0.22
+    const observedWeight = Math.max(45, trueWeight + weeklyPattern + hydrationShock + measurementNoise)
+
+    const loggedCalories = maintenance + kcalDelta + randomNormal() * 140
+    const hasCalories = Math.random() > 0.33
+
+    synthetic.push({
+      date: toIsoDate(date),
+      weight: Number(observedWeight.toFixed(2)),
+      calories: hasCalories ? Math.round(clamp(loggedCalories, 1100, 4200)) : null,
+    })
+  }
+
+  return normalizeEntries(synthetic)
+}
+
+const getMae = (values) => {
+  if (values.length === 0) {
+    return null
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
 const calculateOlsModel = (values) => {
   const n = values.length
   if (n < 2) {
@@ -121,6 +178,38 @@ const calculateOlsModel = (values) => {
 const calculateOlsTrend = (values) => {
   const model = calculateOlsModel(values)
   return model ? model.slope : null
+}
+
+const buildWeeklySeasonality = (entries) => {
+  if (entries.length < 21) {
+    return Array.from({ length: 7 }, () => 0)
+  }
+
+  const model = calculateOlsModel(entries.map((item) => item.weight))
+  if (!model) {
+    return Array.from({ length: 7 }, () => 0)
+  }
+
+  const buckets = Array.from({ length: 7 }, () => [])
+  for (let i = 0; i < entries.length; i += 1) {
+    const date = new Date(entries[i].date)
+    const day = date.getDay()
+    const baseline = model.slope * i + model.intercept
+    const residual = entries[i].weight - baseline
+    buckets[day].push(residual)
+  }
+
+  const raw = buckets.map((values) => {
+    if (values.length === 0) {
+      return 0
+    }
+
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length
+    return mean
+  })
+
+  const overall = raw.reduce((sum, value) => sum + value, 0) / raw.length
+  return raw.map((value) => clamp(value - overall, -0.6, 0.6))
 }
 
 const toOptionalPositiveNumber = (value) => {
@@ -237,13 +326,21 @@ const buildHybridForecast = (entries, profile) => {
   const sigma = Math.max(0.15, Math.sqrt(mse))
   const calorieEffectPerDay = estimateDailyCalorieEffect(entries, profile)
   const totalTrendPerDay = clamp(boundedTrend + calorieEffectPerDay, -0.12, 0.12)
+  const weeklySeasonality = buildWeeklySeasonality(entries)
+  const trendDamping = 0.985
 
   const next90 = []
   for (let horizon = 1; horizon <= 90; horizon += 1) {
     const sourceDate = new Date(entries[entries.length - 1].date)
     sourceDate.setDate(sourceDate.getDate() + horizon)
 
-    const predictedWeight = level + totalTrendPerDay * horizon
+    const dampedTrendContribution =
+      totalTrendPerDay === 0
+        ? 0
+        : totalTrendPerDay * ((1 - trendDamping ** horizon) / (1 - trendDamping))
+    const seasonalDecay = Math.exp(-horizon / 45)
+    const seasonalTerm = weeklySeasonality[sourceDate.getDay()] * seasonalDecay
+    const predictedWeight = level + dampedTrendContribution + seasonalTerm
     const std = sigma * Math.sqrt(horizon)
 
     next90.push({
@@ -273,6 +370,7 @@ const buildOlsForecast = (entries) => {
     return {
       next90: [],
       trendPerDay: null,
+      predicted30d: null,
     }
   }
 
@@ -282,6 +380,7 @@ const buildOlsForecast = (entries) => {
     return {
       next90: [],
       trendPerDay: null,
+      predicted30d: null,
     }
   }
 
@@ -302,6 +401,77 @@ const buildOlsForecast = (entries) => {
   return {
     next90,
     trendPerDay: boundedSlope,
+    predicted30d: Number((latestWeight + boundedSlope * 30).toFixed(2)),
+  }
+}
+
+const evaluateModelBacktest = (entries, profile) => {
+  if (entries.length < BACKTEST_MIN_TRAIN_DAYS + BACKTEST_HORIZON_DAYS + 2) {
+    return null
+  }
+
+  const maxWindows = 80
+  const lastSplitExclusive = entries.length - BACKTEST_HORIZON_DAYS + 1
+  const firstSplit = Math.max(
+    BACKTEST_MIN_TRAIN_DAYS,
+    lastSplitExclusive - maxWindows,
+  )
+
+  const hybridAbsErrors = []
+  const olsAbsErrors = []
+  let hybrid80Covered = 0
+  let windows = 0
+
+  for (let split = firstSplit; split < lastSplitExclusive; split += 1) {
+    const train = entries.slice(0, split)
+    const actual = entries[split + BACKTEST_HORIZON_DAYS - 1]?.weight
+    if (!Number.isFinite(actual)) {
+      continue
+    }
+
+    const hybrid = buildHybridForecast(train, profile)
+    const ols = buildOlsForecast(train)
+    const hybridPred = hybrid.next90?.[BACKTEST_HORIZON_DAYS - 1]
+    const olsPred = ols.next90?.[BACKTEST_HORIZON_DAYS - 1]
+
+    if (!hybridPred || !olsPred) {
+      continue
+    }
+
+    windows += 1
+    hybridAbsErrors.push(Math.abs(actual - hybridPred.weight))
+    olsAbsErrors.push(Math.abs(actual - olsPred.weight))
+
+    if (actual >= hybridPred.low80 && actual <= hybridPred.high80) {
+      hybrid80Covered += 1
+    }
+  }
+
+  if (windows === 0) {
+    return null
+  }
+
+  const hybridMae = getMae(hybridAbsErrors)
+  const olsMae = getMae(olsAbsErrors)
+  const hybridCoverage80 = hybrid80Covered / windows
+
+  let recommendedModel = 'hybrid'
+  if (hybridMae !== null && olsMae !== null) {
+    if (hybridMae <= olsMae * 0.99) {
+      recommendedModel = 'hybrid'
+    } else if (olsMae <= hybridMae * 0.99) {
+      recommendedModel = 'ols'
+    } else {
+      recommendedModel = 'hybrid'
+    }
+  }
+
+  return {
+    windows,
+    hybridMae,
+    olsMae,
+    hybridCoverage80,
+    recommendedModel,
   }
 }
 
@@ -400,10 +570,30 @@ function App() {
     return buildOlsForecast(entries)
   }, [entries])
 
+  const modelBacktest = useMemo(() => {
+    return evaluateModelBacktest(entries, profile)
+  }, [entries, profile])
+
+  const activeModelKey = modelBacktest?.recommendedModel ?? 'hybrid'
+  const activeForecast = activeModelKey === 'ols'
+    ? {
+        next90: olsForecast.next90,
+        trendPerDay: olsForecast.trendPerDay,
+        predicted30d: olsForecast.predicted30d,
+        predicted30dLow95: null,
+        predicted30dHigh95: null,
+        calorieEffectPerDay: null,
+        label: 'OLS baseline',
+      }
+    : {
+        ...forecast,
+        label: 'Hybrid forecast',
+      }
+
   const goalProjection = useMemo(() => {
     const targetWeight = toOptionalPositiveNumber(profile.targetWeight)
     const latestWeight = entries.length > 0 ? entries[entries.length - 1].weight : null
-    const trendPerDay = forecast.trendPerDay
+    const trendPerDay = activeForecast.trendPerDay
 
     if (!targetWeight || !latestWeight || trendPerDay === null) {
       return {
@@ -453,7 +643,7 @@ function App() {
       daysToGoal,
       etaDate: toIsoDate(etaDate),
     }
-  }, [entries, forecast.trendPerDay, profile.targetWeight])
+  }, [entries, activeForecast.trendPerDay, profile.targetWeight])
 
   const projectionWindowDays = useMemo(() => {
     if (goalProjection.status === 'projected' && goalProjection.daysToGoal !== null) {
@@ -466,7 +656,7 @@ function App() {
   const chartData = useMemo(() => {
     const labels = [
       ...entries.map((entry) => formatDate(entry.date)),
-      ...forecast.next90.slice(0, projectionWindowDays).map((entry) => formatDate(entry.date)),
+      ...activeForecast.next90.slice(0, projectionWindowDays).map((entry) => formatDate(entry.date)),
     ]
 
     const actualPoints = [
@@ -474,10 +664,10 @@ function App() {
       ...Array.from({ length: projectionWindowDays }, () => null),
     ]
 
-    const predictionPoints = [
+    const activePredictionPoints = [
       ...Array.from({ length: entries.length - 1 }, () => null),
       entries.length > 0 ? entries[entries.length - 1].weight : null,
-      ...forecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
+      ...activeForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
 
     const olsPredictionPoints = [
@@ -485,6 +675,15 @@ function App() {
       entries.length > 0 ? entries[entries.length - 1].weight : null,
       ...olsForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
+
+    const hybridPredictionPoints = [
+      ...Array.from({ length: entries.length - 1 }, () => null),
+      entries.length > 0 ? entries[entries.length - 1].weight : null,
+      ...forecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
+    ]
+
+    const comparisonLabel = activeModelKey === 'hybrid' ? 'OLS baseline' : 'Hybrid forecast'
+    const comparisonPoints = activeModelKey === 'hybrid' ? olsPredictionPoints : hybridPredictionPoints
 
     const targetWeightLine =
       goalProjection.targetWeight !== null
@@ -518,8 +717,8 @@ function App() {
           pointBackgroundColor: '#0b7f7b',
         },
         {
-          label: 'Forecast',
-          data: predictionPoints,
+          label: `${activeForecast.label} (active)`,
+          data: activePredictionPoints,
           borderColor: '#f97316',
           backgroundColor: '#f97316',
           borderDash: [8, 6],
@@ -530,8 +729,8 @@ function App() {
         ...(showOlsComparison
           ? [
               {
-                label: 'OLS forecast',
-                data: olsPredictionPoints,
+                label: comparisonLabel,
+                data: comparisonPoints,
                 borderColor: '#2563eb',
                 backgroundColor: '#2563eb',
                 borderDash: [3, 4],
@@ -570,7 +769,7 @@ function App() {
           : []),
       ],
     }
-  }, [entries, forecast, goalProjection, projectionWindowDays, olsForecast, showOlsComparison])
+  }, [entries, forecast, goalProjection, projectionWindowDays, olsForecast, showOlsComparison, activeForecast, activeModelKey])
 
   const chartOptions = {
     responsive: true,
@@ -694,6 +893,12 @@ function App() {
 
   const removeEntry = (date) => {
     setEntries((previous) => previous.filter((entry) => entry.date !== date))
+  }
+
+  const useSyntheticDataset = () => {
+    const synthetic = generateSyntheticEntries(140)
+    setEntries(synthetic)
+    setBackupMessage('Generated synthetic dataset (140 days) for model stress-testing.')
   }
 
   const exportToJson = () => {
@@ -902,16 +1107,16 @@ function App() {
         <article className="stat-card">
           <h3>30-Day Estimate</h3>
           <p className="value">
-            {forecast.predicted30d === null ? '--' : `${forecast.predicted30d.toFixed(2)} kg`}
+            {activeForecast.predicted30d === null ? '--' : `${activeForecast.predicted30d.toFixed(2)} kg`}
           </p>
           <small>
-            {forecast.trendPerDay === null
+            {activeForecast.trendPerDay === null
               ? 'Need at least 4 records for forecasting'
-              : `Trend: ${forecast.trendPerDay > 0 ? '+' : ''}${forecast.trendPerDay.toFixed(3)} kg/day`}
+              : `${activeForecast.label}: ${activeForecast.trendPerDay > 0 ? '+' : ''}${activeForecast.trendPerDay.toFixed(3)} kg/day`}
           </small>
-          {forecast.predicted30dLow95 !== null && forecast.predicted30dHigh95 !== null ? (
+          {activeForecast.predicted30dLow95 !== null && activeForecast.predicted30dHigh95 !== null ? (
             <small>
-              95% range: {forecast.predicted30dLow95.toFixed(2)} to {forecast.predicted30dHigh95.toFixed(2)} kg
+              95% range: {activeForecast.predicted30dLow95.toFixed(2)} to {activeForecast.predicted30dHigh95.toFixed(2)} kg
             </small>
           ) : null}
         </article>
@@ -925,6 +1130,23 @@ function App() {
             {forecast.calorieEffectPerDay === null
               ? 'Add profile + calories to enable calorie effect'
               : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
+          </small>
+        </article>
+
+        <article className="stat-card">
+          <h3>Model Quality (7-day Backtest)</h3>
+          <p className="value">
+            {modelBacktest ? `${modelBacktest.windows} windows` : '--'}
+          </p>
+          <small>
+            {modelBacktest
+              ? `Hybrid MAE: ${modelBacktest.hybridMae.toFixed(2)} kg | OLS MAE: ${modelBacktest.olsMae.toFixed(2)} kg`
+              : 'Need more history for rolling backtest'}
+          </small>
+          <small>
+            {modelBacktest
+              ? `Hybrid 80% coverage: ${(modelBacktest.hybridCoverage80 * 100).toFixed(1)}% | Active: ${activeForecast.label}`
+              : 'Backtest starts after enough historical entries are available'}
           </small>
         </article>
 
@@ -949,7 +1171,7 @@ function App() {
       <section className="panel chart-panel">
         <h2>Trend & Forecast Chart</h2>
         <p className="chart-subtitle">
-          Solid teal shows your actual logs. Dashed orange combines trend and optional calorie-based adjustment.
+          Forecast is auto-selected from backtest performance. Comparison mode lets you inspect the alternate model.
         </p>
         <div className="chart-controls">
           <button
@@ -961,7 +1183,7 @@ function App() {
           </button>
           {showOlsComparison ? (
             <p className="chart-hint">
-              Orange = Hybrid forecast, Blue = OLS forecast
+              Active: {activeForecast.label}. Blue overlay shows the alternate model.
             </p>
           ) : null}
         </div>
@@ -991,6 +1213,18 @@ function App() {
           </label>
         </div>
         {backupMessage ? <p className="backup-message">{backupMessage}</p> : null}
+      </section>
+
+      <section className="panel">
+        <h2>Model Lab</h2>
+        <p className="backup-note">
+          Generate realistic synthetic data to stress-test drift, plateau, rebound, and model selection logic.
+        </p>
+        <div className="backup-actions">
+          <button type="button" className="ghost-button" onClick={useSyntheticDataset}>
+            Generate Synthetic Data (140 days)
+          </button>
+        </div>
       </section>
 
       <section className="panel">
