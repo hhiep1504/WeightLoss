@@ -88,6 +88,41 @@ const normalizeEntries = (rawEntries) => {
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max)
 
+const calculateOlsModel = (values) => {
+  const n = values.length
+  if (n < 2) {
+    return null
+  }
+
+  let sumX = 0
+  let sumY = 0
+  let sumXY = 0
+  let sumXX = 0
+
+  for (let i = 0; i < n; i += 1) {
+    const x = i
+    const y = values[i]
+    sumX += x
+    sumY += y
+    sumXY += x * y
+    sumXX += x * x
+  }
+
+  const denominator = n * sumXX - sumX * sumX
+  if (denominator === 0) {
+    return null
+  }
+
+  const slope = (n * sumXY - sumX * sumY) / denominator
+  const intercept = (sumY - slope * sumX) / n
+  return { slope, intercept }
+}
+
+const calculateOlsTrend = (values) => {
+  const model = calculateOlsModel(values)
+  return model ? model.slope : null
+}
+
 const toOptionalPositiveNumber = (value) => {
   if (value === '' || value === null || value === undefined) {
     return null
@@ -129,23 +164,35 @@ const estimateDailyCalorieEffect = (entries, profile) => {
   }
 
   const recentWithCalories = entries
-    .slice(-14)
+    .slice(-21)
     .filter(
       (entry) =>
         Number.isFinite(entry.calories) && entry.calories >= 600 && entry.calories <= 6000,
     )
 
-  if (recentWithCalories.length < 5) {
+  if (recentWithCalories.length < 10) {
     return 0
   }
 
   const avgCalories =
     recentWithCalories.reduce((sum, entry) => sum + entry.calories, 0) /
     recentWithCalories.length
+  const caloriesVariance =
+    recentWithCalories.reduce((sum, entry) => {
+      const delta = entry.calories - avgCalories
+      return sum + delta * delta
+    }, 0) / recentWithCalories.length
+  const caloriesStd = Math.sqrt(caloriesVariance)
+
+  // If calorie logs are too noisy, skip calorie effect instead of pushing an unstable slope.
+  if (!Number.isFinite(caloriesStd) || caloriesStd > 450) {
+    return 0
+  }
+
   const kcalDeltaPerDay = avgCalories - maintenanceCalories
   const kgEffectPerDay = kcalDeltaPerDay / 7700
 
-  return clamp(kgEffectPerDay, -0.25, 0.25)
+  return clamp(kgEffectPerDay, -0.08, 0.08)
 }
 
 const buildHybridForecast = (entries, profile) => {
@@ -178,20 +225,25 @@ const buildHybridForecast = (entries, profile) => {
     trend = beta * (level - prevLevel) + (1 - beta) * trend
   }
 
+  const olsSlope = calculateOlsTrend(weights)
+  const blendedTrend =
+    olsSlope === null ? trend : 0.7 * olsSlope + 0.3 * trend
+  const boundedTrend = clamp(blendedTrend, -0.12, 0.12)
+
   const mse =
     residuals.length > 0
       ? residuals.reduce((sum, value) => sum + value * value, 0) / residuals.length
       : 0.06
   const sigma = Math.max(0.15, Math.sqrt(mse))
   const calorieEffectPerDay = estimateDailyCalorieEffect(entries, profile)
-  const totalTrendPerDay = trend + calorieEffectPerDay
+  const totalTrendPerDay = clamp(boundedTrend + calorieEffectPerDay, -0.12, 0.12)
 
   const next90 = []
   for (let horizon = 1; horizon <= 90; horizon += 1) {
     const sourceDate = new Date(entries[entries.length - 1].date)
     sourceDate.setDate(sourceDate.getDate() + horizon)
 
-    const predictedWeight = level + trend * horizon + calorieEffectPerDay * horizon
+    const predictedWeight = level + totalTrendPerDay * horizon
     const std = sigma * Math.sqrt(horizon)
 
     next90.push({
@@ -202,7 +254,7 @@ const buildHybridForecast = (entries, profile) => {
     })
   }
 
-  const predicted30d = level + trend * 30 + calorieEffectPerDay * 30
+  const predicted30d = level + totalTrendPerDay * 30
   const std30 = sigma * Math.sqrt(30)
 
   return {
@@ -216,6 +268,43 @@ const buildHybridForecast = (entries, profile) => {
   }
 }
 
+const buildOlsForecast = (entries) => {
+  if (entries.length < 4) {
+    return {
+      next90: [],
+      trendPerDay: null,
+    }
+  }
+
+  const weights = entries.map((entry) => entry.weight)
+  const slope = calculateOlsTrend(weights)
+  if (slope === null) {
+    return {
+      next90: [],
+      trendPerDay: null,
+    }
+  }
+
+  const boundedSlope = clamp(slope, -0.15, 0.15)
+  const latestWeight = entries[entries.length - 1].weight
+  const next90 = []
+
+  for (let horizon = 1; horizon <= 90; horizon += 1) {
+    const sourceDate = new Date(entries[entries.length - 1].date)
+    sourceDate.setDate(sourceDate.getDate() + horizon)
+
+    next90.push({
+      date: toIsoDate(sourceDate),
+      weight: Number((latestWeight + boundedSlope * horizon).toFixed(2)),
+    })
+  }
+
+  return {
+    next90,
+    trendPerDay: boundedSlope,
+  }
+}
+
 function App() {
   const [entries, setEntries] = useState([])
   const [form, setForm] = useState({
@@ -224,6 +313,7 @@ function App() {
     calories: '',
   })
   const [profile, setProfile] = useState(defaultProfile)
+  const [showOlsComparison, setShowOlsComparison] = useState(false)
   const [error, setError] = useState('')
   const [backupMessage, setBackupMessage] = useState('')
   const fileInputRef = useRef(null)
@@ -306,6 +396,10 @@ function App() {
     return buildHybridForecast(entries, profile)
   }, [entries, profile])
 
+  const olsForecast = useMemo(() => {
+    return buildOlsForecast(entries)
+  }, [entries])
+
   const goalProjection = useMemo(() => {
     const targetWeight = toOptionalPositiveNumber(profile.targetWeight)
     const latestWeight = entries.length > 0 ? entries[entries.length - 1].weight : null
@@ -386,6 +480,12 @@ function App() {
       ...forecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
 
+    const olsPredictionPoints = [
+      ...Array.from({ length: entries.length - 1 }, () => null),
+      entries.length > 0 ? entries[entries.length - 1].weight : null,
+      ...olsForecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
+    ]
+
     const targetWeightLine =
       goalProjection.targetWeight !== null
         ? Array.from({ length: labels.length }, () => goalProjection.targetWeight)
@@ -427,6 +527,20 @@ function App() {
           pointRadius: 3,
           pointHoverRadius: 5,
         },
+        ...(showOlsComparison
+          ? [
+              {
+                label: 'OLS forecast',
+                data: olsPredictionPoints,
+                borderColor: '#2563eb',
+                backgroundColor: '#2563eb',
+                borderDash: [3, 4],
+                tension: 0,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+              },
+            ]
+          : []),
         ...(goalProjection.targetWeight !== null
           ? [
               {
@@ -456,7 +570,7 @@ function App() {
           : []),
       ],
     }
-  }, [entries, forecast, goalProjection, projectionWindowDays])
+  }, [entries, forecast, goalProjection, projectionWindowDays, olsForecast, showOlsComparison])
 
   const chartOptions = {
     responsive: true,
@@ -837,6 +951,20 @@ function App() {
         <p className="chart-subtitle">
           Solid teal shows your actual logs. Dashed orange combines trend and optional calorie-based adjustment.
         </p>
+        <div className="chart-controls">
+          <button
+            type="button"
+            className={`ghost-button ${showOlsComparison ? 'is-active' : ''}`}
+            onClick={() => setShowOlsComparison((previous) => !previous)}
+          >
+            {showOlsComparison ? 'Hide OLS comparison' : 'Compare OLS vs Hybrid'}
+          </button>
+          {showOlsComparison ? (
+            <p className="chart-hint">
+              Orange = Hybrid forecast, Blue = OLS forecast
+            </p>
+          ) : null}
+        </div>
         <div className="chart-wrap">
           <Line data={chartData} options={chartOptions} />
         </div>

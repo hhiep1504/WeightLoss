@@ -167,6 +167,27 @@
   font-size: 0.94rem;
 }
 
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+  margin: 0 0 0.85rem;
+}
+
+.ghost-button.is-active {
+  border-color: #2563eb;
+  color: #1e40af;
+  background: #eff6ff;
+}
+
+.chart-hint {
+  margin: 0;
+  color: #475569;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
 .chart-wrap {
   height: 330px;
   border-radius: 12px;
