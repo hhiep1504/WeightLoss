@@ -29,6 +29,7 @@ const defaultProfile = {
   age: '',
   heightCm: '',
   sex: '',
+  targetWeight: '',
 }
 
 const toIsoDate = (value) => {
@@ -151,6 +152,7 @@ const buildHybridForecast = (entries, profile) => {
   if (entries.length < 4) {
     return {
       next7: [],
+      next90: [],
       trendPerDay: null,
       calorieEffectPerDay: null,
       predicted30d: null,
@@ -184,15 +186,15 @@ const buildHybridForecast = (entries, profile) => {
   const calorieEffectPerDay = estimateDailyCalorieEffect(entries, profile)
   const totalTrendPerDay = trend + calorieEffectPerDay
 
-  const next7 = []
-  for (let horizon = 1; horizon <= 7; horizon += 1) {
+  const next90 = []
+  for (let horizon = 1; horizon <= 90; horizon += 1) {
     const sourceDate = new Date(entries[entries.length - 1].date)
     sourceDate.setDate(sourceDate.getDate() + horizon)
 
     const predictedWeight = level + trend * horizon + calorieEffectPerDay * horizon
     const std = sigma * Math.sqrt(horizon)
 
-    next7.push({
+    next90.push({
       date: toIsoDate(sourceDate),
       weight: Number(predictedWeight.toFixed(2)),
       low80: Number((predictedWeight - 1.28 * std).toFixed(2)),
@@ -204,7 +206,8 @@ const buildHybridForecast = (entries, profile) => {
   const std30 = sigma * Math.sqrt(30)
 
   return {
-    next7,
+    next7: next90.slice(0, 7),
+    next90,
     trendPerDay: totalTrendPerDay,
     calorieEffectPerDay,
     predicted30d: Number(predicted30d.toFixed(2)),
@@ -251,6 +254,7 @@ function App() {
         age: parsed?.age ?? '',
         heightCm: parsed?.heightCm ?? '',
         sex: parsed?.sex ?? '',
+        targetWeight: parsed?.targetWeight ?? '',
       })
     } catch {
       setProfile(defaultProfile)
@@ -271,6 +275,7 @@ function App() {
         latest: null,
         delta7d: null,
         avg: null,
+        avgCalories: null,
       }
     }
 
@@ -301,22 +306,102 @@ function App() {
     return buildHybridForecast(entries, profile)
   }, [entries, profile])
 
+  const goalProjection = useMemo(() => {
+    const targetWeight = toOptionalPositiveNumber(profile.targetWeight)
+    const latestWeight = entries.length > 0 ? entries[entries.length - 1].weight : null
+    const trendPerDay = forecast.trendPerDay
+
+    if (!targetWeight || !latestWeight || trendPerDay === null) {
+      return {
+        targetWeight,
+        status: 'missing',
+        daysToGoal: null,
+        etaDate: null,
+      }
+    }
+
+    const delta = targetWeight - latestWeight
+    if (Math.abs(delta) <= 0.05) {
+      return {
+        targetWeight,
+        status: 'reached',
+        daysToGoal: 0,
+        etaDate: entries[entries.length - 1].date,
+      }
+    }
+
+    if (Math.abs(trendPerDay) < 0.005) {
+      return {
+        targetWeight,
+        status: 'flat',
+        daysToGoal: null,
+        etaDate: null,
+      }
+    }
+
+    const rawDays = delta / trendPerDay
+    if (rawDays <= 0) {
+      return {
+        targetWeight,
+        status: 'opposite',
+        daysToGoal: null,
+        etaDate: null,
+      }
+    }
+
+    const daysToGoal = Math.ceil(rawDays)
+    const etaDate = new Date(entries[entries.length - 1].date)
+    etaDate.setDate(etaDate.getDate() + daysToGoal)
+
+    return {
+      targetWeight,
+      status: 'projected',
+      daysToGoal,
+      etaDate: toIsoDate(etaDate),
+    }
+  }, [entries, forecast.trendPerDay, profile.targetWeight])
+
+  const projectionWindowDays = useMemo(() => {
+    if (goalProjection.status === 'projected' && goalProjection.daysToGoal !== null) {
+      return clamp(goalProjection.daysToGoal + 7, 30, 90)
+    }
+
+    return 30
+  }, [goalProjection.daysToGoal, goalProjection.status])
+
   const chartData = useMemo(() => {
     const labels = [
       ...entries.map((entry) => formatDate(entry.date)),
-      ...forecast.next7.map((entry) => formatDate(entry.date)),
+      ...forecast.next90.slice(0, projectionWindowDays).map((entry) => formatDate(entry.date)),
     ]
 
     const actualPoints = [
       ...entries.map((entry) => entry.weight),
-      ...Array.from({ length: forecast.next7.length }, () => null),
+      ...Array.from({ length: projectionWindowDays }, () => null),
     ]
 
     const predictionPoints = [
       ...Array.from({ length: entries.length - 1 }, () => null),
       entries.length > 0 ? entries[entries.length - 1].weight : null,
-      ...forecast.next7.map((item) => item.weight),
+      ...forecast.next90.slice(0, projectionWindowDays).map((item) => item.weight),
     ]
+
+    const targetWeightLine =
+      goalProjection.targetWeight !== null
+        ? Array.from({ length: labels.length }, () => goalProjection.targetWeight)
+        : []
+
+    const etaPointSeries = Array.from({ length: labels.length }, () => null)
+    if (
+      goalProjection.status === 'projected' &&
+      goalProjection.daysToGoal !== null &&
+      goalProjection.daysToGoal <= projectionWindowDays
+    ) {
+      const etaIndex = entries.length - 1 + goalProjection.daysToGoal
+      if (etaIndex >= 0 && etaIndex < etaPointSeries.length) {
+        etaPointSeries[etaIndex] = goalProjection.targetWeight
+      }
+    }
 
     return {
       labels,
@@ -333,7 +418,7 @@ function App() {
           pointBackgroundColor: '#0b7f7b',
         },
         {
-          label: 'Forecast (next 7 days)',
+          label: 'Forecast',
           data: predictionPoints,
           borderColor: '#f97316',
           backgroundColor: '#f97316',
@@ -342,9 +427,36 @@ function App() {
           pointRadius: 3,
           pointHoverRadius: 5,
         },
+        ...(goalProjection.targetWeight !== null
+          ? [
+              {
+                label: 'Target weight',
+                data: targetWeightLine,
+                borderColor: '#7c3aed',
+                backgroundColor: '#7c3aed',
+                borderDash: [4, 5],
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 0,
+              },
+            ]
+          : []),
+        ...(goalProjection.status === 'projected'
+          ? [
+              {
+                label: 'Estimated target date',
+                data: etaPointSeries,
+                borderColor: '#7c3aed',
+                backgroundColor: '#7c3aed',
+                showLine: false,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+              },
+            ]
+          : []),
       ],
     }
-  }, [entries, forecast])
+  }, [entries, forecast, goalProjection, projectionWindowDays])
 
   const chartOptions = {
     responsive: true,
@@ -382,7 +494,14 @@ function App() {
         cornerRadius: 10,
         callbacks: {
           title: (context) => `Date: ${context[0]?.label ?? ''}`,
-          label: (context) => `${context.dataset.label}: ${context.parsed.y?.toFixed(1)} kg`,
+          label: (context) => {
+            const value = context.parsed.y
+            if (!Number.isFinite(value)) {
+              return null
+            }
+
+            return `${context.dataset.label}: ${value.toFixed(1)} kg`
+          },
         },
       },
     },
@@ -510,6 +629,7 @@ function App() {
           age: importedProfile.age ?? '',
           heightCm: importedProfile.heightCm ?? '',
           sex: importedProfile.sex ?? '',
+          targetWeight: importedProfile.targetWeight ?? '',
         })
       }
       setBackupMessage(`Imported ${normalized.length} entries from JSON.`)
@@ -623,6 +743,20 @@ function App() {
               <option value="female">Female</option>
             </select>
           </label>
+
+          <label>
+            Target weight (kg)
+            <input
+              type="number"
+              min="1"
+              step="0.1"
+              placeholder="e.g. 65"
+              value={profile.targetWeight}
+              onChange={(event) =>
+                setProfile((previous) => ({ ...previous, targetWeight: event.target.value }))
+              }
+            />
+          </label>
         </div>
       </section>
 
@@ -677,6 +811,23 @@ function App() {
             {forecast.calorieEffectPerDay === null
               ? 'Add profile + calories to enable calorie effect'
               : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
+          </small>
+        </article>
+
+        <article className="stat-card">
+          <h3>Target ETA</h3>
+          <p className="value">
+            {goalProjection.targetWeight === null
+              ? '--'
+              : `${goalProjection.targetWeight.toFixed(1)} kg`}
+          </p>
+          <small>
+            {goalProjection.status === 'missing' && 'Set target weight + enough entries to estimate ETA'}
+            {goalProjection.status === 'reached' && 'You are already at your target'}
+            {goalProjection.status === 'flat' && 'Trend is too flat now to estimate ETA'}
+            {goalProjection.status === 'opposite' && 'Current trend is moving away from this target'}
+            {goalProjection.status === 'projected' &&
+              `Estimated in ${goalProjection.daysToGoal} days (${formatDate(goalProjection.etaDate)})`}
           </small>
         </article>
       </section>
