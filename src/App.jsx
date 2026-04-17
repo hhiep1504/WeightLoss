@@ -11,7 +11,7 @@ import {
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
 import './App.css'
-import { isSupabaseConfigured, supabase } from './lib/supabase'
+import { isSupabaseConfigured, missingSupabaseEnv, supabase } from './lib/supabase'
 
 ChartJS.register(
   CategoryScale,
@@ -1335,7 +1335,7 @@ function App() {
         <h2>Cloud Sync (Free)</h2>
         {!isSupabaseConfigured ? (
           <p className="backup-note">
-            Cloud is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your env file to enable free sync.
+            Cloud is not configured. Missing: {missingSupabaseEnv.join(', ')}. Add these variables to your env file (or GitHub Actions secrets) to enable free sync.
           </p>
         ) : (
           <>
