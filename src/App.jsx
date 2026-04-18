@@ -1311,6 +1311,22 @@ function App() {
     }
   }
 
+  const clearLocalData = () => {
+    const confirmed = window.confirm(
+      'This will delete all locally stored entries and profile data in this browser. Continue?',
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(PROFILE_STORAGE_KEY)
+    setEntries([])
+    setProfile(defaultProfile)
+    setBackupMessage('All local data has been cleared from this browser.')
+  }
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -1626,6 +1642,10 @@ function App() {
               onChange={importFromJson}
             />
           </label>
+
+          <button type="button" className="ghost-button" onClick={clearLocalData}>
+            Clear Local Data
+          </button>
         </div>
         {backupMessage ? <p className="backup-message">{backupMessage}</p> : null}
       </section>
