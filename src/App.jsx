@@ -1097,35 +1097,39 @@ function App() {
         {
           label: 'Actual weight',
           data: actualPoints,
-          borderColor: '#0ea5a0',
-          backgroundColor: 'rgba(14, 165, 160, 0.18)',
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37, 99, 235, 0.16)',
           fill: true,
           tension: 0.35,
           pointRadius: 3,
           pointHoverRadius: 6,
-          pointBackgroundColor: '#0b7f7b',
+          pointBackgroundColor: '#2563eb',
         },
         {
           label: `${activeForecast.label} (active)`,
           data: activePredictionPoints,
-          borderColor: '#f97316',
-          backgroundColor: '#f97316',
+          borderColor: 'rgba(37, 99, 235, 0.58)',
+          backgroundColor: 'rgba(37, 99, 235, 0.58)',
           borderDash: [8, 6],
           tension: 0.35,
           pointRadius: 3,
           pointHoverRadius: 5,
+          pointBackgroundColor: '#2563eb',
+          pointBorderColor: '#2563eb',
         },
         ...(showOlsComparison
           ? [
               {
                 label: `${alternateForecast.label} (alternate)`,
                 data: alternatePredictionPoints,
-                borderColor: '#2563eb',
-                backgroundColor: '#2563eb',
+                borderColor: 'rgba(37, 99, 235, 0.34)',
+                backgroundColor: 'rgba(37, 99, 235, 0.34)',
                 borderDash: [3, 4],
                 tension: 0,
                 pointRadius: 2,
                 pointHoverRadius: 4,
+                pointBackgroundColor: '#2563eb',
+                pointBorderColor: '#2563eb',
               },
             ]
           : []),
@@ -1134,10 +1138,10 @@ function App() {
               {
                 label: 'Target weight',
                 data: targetWeightLine,
-                borderColor: '#7c3aed',
-                backgroundColor: '#7c3aed',
+                borderColor: '#e11d48',
+                backgroundColor: '#e11d48',
                 borderDash: [4, 5],
-                borderWidth: 2,
+                borderWidth: 2.4,
                 pointRadius: 0,
                 pointHoverRadius: 0,
               },
@@ -1148,8 +1152,8 @@ function App() {
               {
                 label: 'Estimated target date',
                 data: etaPointSeries,
-                borderColor: '#7c3aed',
-                backgroundColor: '#7c3aed',
+                borderColor: '#be123c',
+                backgroundColor: '#be123c',
                 showLine: false,
                 pointRadius: 5,
                 pointHoverRadius: 7,
@@ -1175,15 +1179,22 @@ function App() {
           boxWidth: 8,
           boxHeight: 8,
           padding: 16,
+          color: '#3f3a32',
+          font: {
+            family: 'IBM Plex Sans, Segoe UI, sans-serif',
+            size: 12,
+            weight: '500',
+          },
         },
       },
       title: {
         display: true,
-        text: 'Your Weight Journey',
-        color: '#0f172a',
+        text: 'Weight Trend and Forecast',
+        color: '#28231d',
         font: {
-          size: 18,
-          weight: '700',
+          family: 'IBM Plex Sans, Segoe UI, sans-serif',
+          size: 17,
+          weight: '600',
         },
         padding: {
           top: 4,
@@ -1191,9 +1202,17 @@ function App() {
         },
       },
       tooltip: {
-        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+        backgroundColor: 'rgba(28, 27, 25, 0.94)',
         padding: 12,
         cornerRadius: 10,
+        titleFont: {
+          family: 'IBM Plex Sans, Segoe UI, sans-serif',
+          weight: '600',
+        },
+        bodyFont: {
+          family: 'IBM Plex Sans, Segoe UI, sans-serif',
+          weight: '500',
+        },
         callbacks: {
           title: (context) => `Date: ${context[0]?.label ?? ''}`,
           label: (context) => {
@@ -1216,7 +1235,12 @@ function App() {
           maxRotation: 0,
           autoSkip: true,
           maxTicksLimit: 8,
-          color: '#64748b',
+          color: '#6b665e',
+          font: {
+            family: 'IBM Plex Sans, Segoe UI, sans-serif',
+            size: 11,
+            weight: '500',
+          },
         },
       },
       y: {
@@ -1224,18 +1248,24 @@ function App() {
           display: false,
         },
         grid: {
-          color: 'rgba(148, 163, 184, 0.22)',
+          color: 'rgba(116, 107, 94, 0.18)',
           drawTicks: false,
         },
         ticks: {
-          color: '#64748b',
+          color: '#6b665e',
+          font: {
+            family: 'IBM Plex Sans, Segoe UI, sans-serif',
+            size: 11,
+            weight: '500',
+          },
           callback: (value) => `${value} kg`,
         },
         title: {
           display: true,
           text: 'Weight (kg)',
-          color: '#475569',
+          color: '#5e584f',
           font: {
+            family: 'IBM Plex Sans, Segoe UI, sans-serif',
             weight: '600',
           },
         },
@@ -1693,110 +1723,126 @@ function App() {
         </div>
       </section>
 
-      <section className="stats-grid">
-        <article className="stat-card">
-          <h3>Latest Record</h3>
-          <p className="value">
-            {stats.latest ? `${stats.latest.weight.toFixed(1)} kg` : '--'}
-          </p>
-          <small>{stats.latest ? formatDate(stats.latest.date) : 'No data yet'}</small>
-        </article>
+      <section className="stats-section">
+        <div className="stats-group">
+          <header className="stats-group-header">
+            <h2>Tracking Stats</h2>
+            <p>Current and historical metrics from your logged data.</p>
+          </header>
+          <div className="stats-grid">
+            <article className="stat-card">
+              <h3>Latest Record</h3>
+              <p className="value">
+                {stats.latest ? `${stats.latest.weight.toFixed(1)} kg` : '--'}
+              </p>
+              <small>{stats.latest ? formatDate(stats.latest.date) : 'No data yet'}</small>
+            </article>
 
-        <article className="stat-card">
-          <h3>~7-Day Change</h3>
-          <p className="value">
-            {stats.delta7d === null
-              ? '--'
-              : `${stats.delta7d > 0 ? '+' : ''}${stats.delta7d.toFixed(2)} kg`}
-          </p>
-          <small>{stats.delta7d === null ? 'Need at least 2 records' : 'Compared to an earlier point'}</small>
-        </article>
+            <article className="stat-card">
+              <h3>~7-Day Change</h3>
+              <p className="value">
+                {stats.delta7d === null
+                  ? '--'
+                  : `${stats.delta7d > 0 ? '+' : ''}${stats.delta7d.toFixed(2)} kg`}
+              </p>
+              <small>{stats.delta7d === null ? 'Need at least 2 records' : 'Compared to an earlier point'}</small>
+            </article>
 
-        <article className="stat-card">
-          <h3>Overall Average</h3>
-          <p className="value">{stats.avg === null ? '--' : `${stats.avg.toFixed(2)} kg`}</p>
-          <small>Based on your full entry history</small>
-        </article>
+            <article className="stat-card">
+              <h3>Overall Average</h3>
+              <p className="value">{stats.avg === null ? '--' : `${stats.avg.toFixed(2)} kg`}</p>
+              <small>Based on your full entry history</small>
+            </article>
 
-        <article className="stat-card">
-          <h3>30-Day Estimate</h3>
-          <p className="value">
-            {activeForecast.predicted30d === null ? '--' : `${activeForecast.predicted30d.toFixed(2)} kg`}
-          </p>
-          <small>
-            {activeForecast.trendPerDay === null
-              ? 'Need at least 4 records for forecasting'
-              : `${activeForecast.label}: ${activeForecast.trendPerDay > 0 ? '+' : ''}${activeForecast.trendPerDay.toFixed(3)} kg/day`}
-          </small>
-          {activeForecast.predicted30dLow95 !== null && activeForecast.predicted30dHigh95 !== null ? (
-            <small>
-              95% range: {activeForecast.predicted30dLow95.toFixed(2)} to {activeForecast.predicted30dHigh95.toFixed(2)} kg
-            </small>
-          ) : null}
-        </article>
+            <article className="stat-card">
+              <h3>Avg Logged Calories</h3>
+              <p className="value">
+                {stats.avgCalories === null ? '--' : `${Math.round(stats.avgCalories)} kcal`}
+              </p>
+              <small>
+                {forecast.calorieEffectPerDay === null
+                  ? 'Add profile + calories to enable calorie effect'
+                  : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
+              </small>
+              <small>
+                {forecast.stepEffectPerDay === null
+                  ? 'Add steps for activity effect'
+                  : `Step effect: ${forecast.stepEffectPerDay > 0 ? '+' : ''}${forecast.stepEffectPerDay.toFixed(3)} kg/day`}
+              </small>
+            </article>
 
-        <article className="stat-card">
-          <h3>Avg Logged Calories</h3>
-          <p className="value">
-            {stats.avgCalories === null ? '--' : `${Math.round(stats.avgCalories)} kcal`}
-          </p>
-          <small>
-            {forecast.calorieEffectPerDay === null
-              ? 'Add profile + calories to enable calorie effect'
-              : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
-          </small>
-          <small>
-            {forecast.stepEffectPerDay === null
-              ? 'Add steps for activity effect'
-              : `Step effect: ${forecast.stepEffectPerDay > 0 ? '+' : ''}${forecast.stepEffectPerDay.toFixed(3)} kg/day`}
-          </small>
-        </article>
+            <article className="stat-card">
+              <h3>Avg Daily Steps</h3>
+              <p className="value">
+                {stats.avgSteps === null ? '--' : `${Math.round(stats.avgSteps).toLocaleString()} steps`}
+              </p>
+              <small>
+                {stats.avgSteps === null
+                  ? 'Log steps to track activity alongside weight changes'
+                  : 'Based on entries that include step count'}
+              </small>
+            </article>
+          </div>
+        </div>
 
-        <article className="stat-card">
-          <h3>Avg Daily Steps</h3>
-          <p className="value">
-            {stats.avgSteps === null ? '--' : `${Math.round(stats.avgSteps).toLocaleString()} steps`}
-          </p>
-          <small>
-            {stats.avgSteps === null
-              ? 'Log steps to track activity alongside weight changes'
-              : 'Based on entries that include step count'}
-          </small>
-        </article>
+        <div className="stats-group stats-group-forecast">
+          <header className="stats-group-header">
+            <h2>Forecast Stats</h2>
+            <p>Projection, model confidence, and target trajectory.</p>
+          </header>
+          <div className="stats-grid">
+            <article className="stat-card">
+              <h3>30-Day Estimate</h3>
+              <p className="value">
+                {activeForecast.predicted30d === null ? '--' : `${activeForecast.predicted30d.toFixed(2)} kg`}
+              </p>
+              <small>
+                {activeForecast.trendPerDay === null
+                  ? 'Need at least 4 records for forecasting'
+                  : `${activeForecast.label}: ${activeForecast.trendPerDay > 0 ? '+' : ''}${activeForecast.trendPerDay.toFixed(3)} kg/day`}
+              </small>
+              {activeForecast.predicted30dLow95 !== null && activeForecast.predicted30dHigh95 !== null ? (
+                <small>
+                  95% range: {activeForecast.predicted30dLow95.toFixed(2)} to {activeForecast.predicted30dHigh95.toFixed(2)} kg
+                </small>
+              ) : null}
+            </article>
 
-        <article className="stat-card">
-          <h3>Model Quality (7-day Backtest)</h3>
-          <p className="value">
-            {modelBacktest ? `${modelBacktest.windows} windows` : '--'}
-          </p>
-          <small>
-            {modelBacktest
-              ? `Hybrid MAE: ${modelBacktest.hybridMae.toFixed(2)} kg | Dynamic MAE: ${modelBacktest.mechanisticMae.toFixed(2)} kg | OLS MAE: ${modelBacktest.olsMae.toFixed(2)} kg`
-              : 'Need more history for rolling backtest'}
-          </small>
-          <small>
-            {modelBacktest
-              ? `Hybrid 80% coverage: ${(modelBacktest.hybridCoverage80 * 100).toFixed(1)}% | Active model: ${activeForecast.label}`
-              : 'Backtest starts after enough historical entries are available'}
-          </small>
-        </article>
+            <article className="stat-card">
+              <h3>Model Quality (7-day Backtest)</h3>
+              <p className="value">
+                {modelBacktest ? `${modelBacktest.windows} windows` : '--'}
+              </p>
+              <small>
+                {modelBacktest
+                  ? `Hybrid MAE: ${modelBacktest.hybridMae.toFixed(2)} kg | Dynamic MAE: ${modelBacktest.mechanisticMae.toFixed(2)} kg | OLS MAE: ${modelBacktest.olsMae.toFixed(2)} kg`
+                  : 'Need more history for rolling backtest'}
+              </small>
+              <small>
+                {modelBacktest
+                  ? `Hybrid 80% coverage: ${(modelBacktest.hybridCoverage80 * 100).toFixed(1)}% | Active model: ${activeForecast.label}`
+                  : 'Backtest starts after enough historical entries are available'}
+              </small>
+            </article>
 
-        <article className="stat-card">
-          <h3>Target ETA</h3>
-          <p className="value">
-            {goalProjection.targetWeight === null
-              ? '--'
-              : `${goalProjection.targetWeight.toFixed(1)} kg`}
-          </p>
-          <small>
-            {goalProjection.status === 'missing' && 'Set target weight + enough entries to estimate ETA'}
-            {goalProjection.status === 'reached' && 'You are already at your target'}
-            {goalProjection.status === 'flat' && 'Trend is too flat now to estimate ETA'}
-            {goalProjection.status === 'opposite' && 'Current trend is moving away from this target'}
-            {goalProjection.status === 'projected' &&
-              `Estimated in ${goalProjection.daysToGoal} days (${formatDate(goalProjection.etaDate)})`}
-          </small>
-        </article>
+            <article className="stat-card">
+              <h3>Target ETA</h3>
+              <p className="value">
+                {goalProjection.targetWeight === null
+                  ? '--'
+                  : `${goalProjection.targetWeight.toFixed(1)} kg`}
+              </p>
+              <small>
+                {goalProjection.status === 'missing' && 'Set target weight + enough entries to estimate ETA'}
+                {goalProjection.status === 'reached' && 'You are already at your target'}
+                {goalProjection.status === 'flat' && 'Trend is too flat now to estimate ETA'}
+                {goalProjection.status === 'opposite' && 'Current trend is moving away from this target'}
+                {goalProjection.status === 'projected' &&
+                  `Estimated in ${goalProjection.daysToGoal} days (${formatDate(goalProjection.etaDate)})`}
+              </small>
+            </article>
+          </div>
+        </div>
       </section>
 
       <section className="panel chart-panel">
