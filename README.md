@@ -94,3 +94,71 @@ You can copy from [.env.example](.env.example).
 3. Enter your email and request a magic login link.
 
 Data remains local-first and syncs to cloud when signed in.
+
+## Apple Health Steps Auto Sync (iPhone Shortcut)
+
+Web apps cannot read Apple Health directly. The practical free solution is:
+
+1. iPhone Shortcut reads Steps from Apple Health.
+2. Shortcut sends a POST request to a Supabase Edge Function.
+3. Function updates `entries.steps` for that date.
+
+### 1) Deploy edge function
+
+File is already included at [supabase/functions/ingest-apple-steps/index.ts](supabase/functions/ingest-apple-steps/index.ts).
+
+Deploy with Supabase CLI:
+
+```bash
+supabase functions deploy ingest-apple-steps
+```
+
+Function endpoint format:
+
+```text
+https://<project-ref>.supabase.co/functions/v1/ingest-apple-steps
+```
+
+### 2) Run schema update and create ingest token
+
+Run [supabase/schema.sql](supabase/schema.sql), then create your personal token:
+
+```sql
+insert into public.step_ingest_tokens (user_id, token, is_active)
+values ('<your-auth-user-id>', '<your-long-random-token>', true)
+on conflict (user_id)
+do update set
+	token = excluded.token,
+	is_active = excluded.is_active,
+	updated_at = now();
+```
+
+How to get `<your-auth-user-id>`:
+
+- In Supabase SQL editor: `select id, email from auth.users order by created_at desc;`
+
+### 3) Build iPhone Shortcut
+
+Recommended Shortcut flow:
+
+1. `Find Health Samples` (Type: Steps, Start Date: Today, End Date: Today)
+2. `Calculate Statistics` (Sum)
+3. `Format Date` as `yyyy-MM-dd`
+4. `Get Contents of URL`
+	 - URL: your function URL
+	 - Method: `POST`
+	 - Headers:
+		 - `Content-Type: application/json`
+		 - `x-ingest-token: <your-long-random-token>`
+	 - JSON Body:
+		 - `date`: formatted date (yyyy-MM-dd)
+		 - `steps`: summed steps number
+
+The endpoint now accepts both `yyyy-MM-dd` and `dd/MM/yyyy` date formats.
+
+Schedule this Shortcut daily (for example 23:59).
+
+### Important behavior
+
+- This endpoint updates steps for an existing weight entry date.
+- If that date has no weight row yet, API returns 409: add weight first, then sync steps.

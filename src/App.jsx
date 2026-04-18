@@ -25,7 +25,6 @@ ChartJS.register(
 
 const STORAGE_KEY = 'weight-loss-daily-entries-v1'
 const PROFILE_STORAGE_KEY = 'weight-loss-user-profile-v1'
-const REAL_DATA_SNAPSHOT_KEY = 'weight-loss-real-data-snapshot-v1'
 const BACKTEST_HORIZON_DAYS = 7
 const BACKTEST_MIN_TRAIN_DAYS = 28
 
@@ -100,51 +99,6 @@ const randomNormal = () => {
   const u = 1 - Math.random()
   const v = Math.random()
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
-}
-
-const generateSyntheticEntries = (days = 140) => {
-  const synthetic = []
-  const today = new Date()
-  const startDate = new Date(today)
-  startDate.setDate(today.getDate() - (days - 1))
-
-  let trueWeight = 83
-  const maintenance = 2450
-
-  for (let i = 0; i < days; i += 1) {
-    const date = new Date(startDate)
-    date.setDate(startDate.getDate() + i)
-
-    const progress = i / Math.max(1, days - 1)
-    let kcalDelta = -450
-    if (progress > 0.3) kcalDelta = -280
-    if (progress > 0.55) kcalDelta = -110
-    if (progress > 0.78) kcalDelta = 140
-
-    const adaptiveSlowdown = clamp((83 - trueWeight) * 12, 0, 180)
-    const effectiveDelta = kcalDelta + adaptiveSlowdown
-    trueWeight += effectiveDelta / 7700
-
-    const weeklyPattern = [0.18, 0.06, -0.08, -0.14, 0.02, 0.19, 0.24][date.getDay()]
-    const hydrationShock = Math.random() < 0.06 ? (Math.random() < 0.5 ? -0.7 : 0.7) : 0
-    const measurementNoise = randomNormal() * 0.22
-    const observedWeight = Math.max(45, trueWeight + weeklyPattern + hydrationShock + measurementNoise)
-
-    const loggedCalories = maintenance + kcalDelta + randomNormal() * 140
-    const hasCalories = Math.random() > 0.33
-    const hasSteps = Math.random() > 0.08
-    const loggedSteps =
-      7400 + randomNormal() * 1700 + clamp(-effectiveDelta * 5, -900, 900)
-
-    synthetic.push({
-      date: toIsoDate(date),
-      weight: Number(observedWeight.toFixed(2)),
-      calories: hasCalories ? Math.round(clamp(loggedCalories, 1100, 4200)) : null,
-      steps: hasSteps ? Math.round(clamp(loggedSteps, 1800, 22000)) : null,
-    })
-  }
-
-  return normalizeEntries(synthetic)
 }
 
 const getMae = (values) => {
@@ -1297,50 +1251,6 @@ function App() {
     setCloudStatus('Cloud disconnected')
   }
 
-  const saveRealDataSnapshot = () => {
-    const payload = {
-      entries,
-      profile,
-      capturedAt: new Date().toISOString(),
-    }
-    localStorage.setItem(REAL_DATA_SNAPSHOT_KEY, JSON.stringify(payload))
-  }
-
-  const useSyntheticDataset = () => {
-    saveRealDataSnapshot()
-    const synthetic = generateSyntheticEntries(140)
-    setEntries(synthetic)
-    setBackupMessage('Generated synthetic dataset (140 days). You can use Reset to restore your real data snapshot.')
-  }
-
-  const resetToRealData = () => {
-    const snapshot = localStorage.getItem(REAL_DATA_SNAPSHOT_KEY)
-    if (!snapshot) {
-      setBackupMessage('No real-data snapshot found yet. Generate synthetic data once to create one.')
-      return
-    }
-
-    try {
-      const parsed = JSON.parse(snapshot)
-      const restoredEntries = normalizeEntries(parsed?.entries)
-      if (restoredEntries.length === 0) {
-        setBackupMessage('Snapshot exists but has no valid entries to restore.')
-        return
-      }
-
-      setEntries(restoredEntries)
-      setProfile({
-        age: parsed?.profile?.age ?? '',
-        heightCm: parsed?.profile?.heightCm ?? '',
-        sex: parsed?.profile?.sex ?? '',
-        targetWeight: parsed?.profile?.targetWeight ?? '',
-      })
-      setBackupMessage('Restored your real dataset from snapshot.')
-    } catch {
-      setBackupMessage('Could not restore snapshot. It may be corrupted.')
-    }
-  }
-
   const exportToJson = () => {
     const payload = {
       version: 1,
@@ -1718,21 +1628,6 @@ function App() {
           </label>
         </div>
         {backupMessage ? <p className="backup-message">{backupMessage}</p> : null}
-      </section>
-
-      <section className="panel">
-        <h2>Model Lab</h2>
-        <p className="backup-note">
-          Generate realistic synthetic data to stress-test drift, plateau, rebound, and model selection logic.
-        </p>
-        <div className="backup-actions">
-          <button type="button" className="ghost-button" onClick={useSyntheticDataset}>
-            Generate Synthetic Data (140 days)
-          </button>
-          <button type="button" className="ghost-button" onClick={resetToRealData}>
-            Reset to Real Data
-          </button>
-        </div>
       </section>
 
       <section className="panel">
