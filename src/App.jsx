@@ -747,6 +747,16 @@ function App() {
       updated_at: timestamp,
     }
 
+    const hasProfileData =
+      profilePayload.age !== null ||
+      profilePayload.height_cm !== null ||
+      profilePayload.sex !== null ||
+      profilePayload.target_weight !== null
+
+    if (!hasProfileData) {
+      return
+    }
+
     const { error: profileError } = await supabase
       .from('profiles')
       .upsert(profilePayload, { onConflict: 'user_id' })
@@ -1311,6 +1321,13 @@ function App() {
     }
   }
 
+  const resetLocalData = () => {
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(PROFILE_STORAGE_KEY)
+    setEntries([])
+    setProfile(defaultProfile)
+  }
+
   const clearLocalData = () => {
     const confirmed = window.confirm(
       'This will delete all locally stored entries and profile data in this browser. Continue?',
@@ -1320,11 +1337,40 @@ function App() {
       return
     }
 
-    localStorage.removeItem(STORAGE_KEY)
-    localStorage.removeItem(PROFILE_STORAGE_KEY)
-    setEntries([])
-    setProfile(defaultProfile)
+    resetLocalData()
     setBackupMessage('All local data has been cleared from this browser.')
+  }
+
+  const clearCloudData = async () => {
+    if (!supabase || !cloudSession?.user?.id) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      'This will permanently delete your cloud entries and profile, then clear local data on this browser. Continue?',
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    setCloudStatus('Deleting cloud data...')
+    const userId = cloudSession.user.id
+
+    const [{ error: entriesError }, { error: profileError }] = await Promise.all([
+      supabase.from('entries').delete().eq('user_id', userId),
+      supabase.from('profiles').delete().eq('user_id', userId),
+    ])
+
+    if (entriesError || profileError) {
+      setCloudStatus(`Cloud delete error: ${(entriesError ?? profileError)?.message}`)
+      return
+    }
+
+    setCloudHydrated(false)
+    resetLocalData()
+    setCloudStatus('Cloud data deleted')
+    setBackupMessage('Cloud data and local browser data were cleared.')
   }
 
   return (
@@ -1349,6 +1395,9 @@ function App() {
             {cloudSession?.user ? (
               <div className="backup-actions">
                 <span className="cloud-user">Signed in as {cloudSession.user.email}</span>
+                <button type="button" className="ghost-button" onClick={clearCloudData}>
+                  Delete Cloud Data
+                </button>
                 <button type="button" className="ghost-button" onClick={signOutCloud}>
                   Sign out
                 </button>
