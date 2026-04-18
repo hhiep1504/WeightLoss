@@ -1724,7 +1724,7 @@ function App() {
       </section>
 
       <section className="stats-section">
-        <div className="stats-group">
+        <div className="stats-group panel">
           <header className="stats-group-header">
             <h2>Tracking Stats</h2>
             <p>Current and historical metrics from your logged data.</p>
@@ -1785,7 +1785,7 @@ function App() {
           </div>
         </div>
 
-        <div className="stats-group stats-group-forecast">
+        <div className="stats-group stats-group-forecast panel">
           <header className="stats-group-header">
             <h2>Forecast Stats</h2>
             <p>Projection, model confidence, and target trajectory.</p>

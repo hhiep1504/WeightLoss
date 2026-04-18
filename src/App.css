@@ -187,19 +187,23 @@
 }
 
 .stats-group-header {
-  margin-bottom: 0.56rem;
+  margin: -0.1rem 0 0.72rem;
+  padding: 0 0 0.72rem;
+  border-bottom: 1px solid #ddd5c8;
 }
 
 .stats-group-header h2 {
   margin: 0;
-  font-size: 1.02rem;
-  color: #2f2a23;
+  font-size: 1.26rem;
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .stats-group-header p {
   margin: 0.2rem 0 0;
   color: #6d675e;
-  font-size: 0.88rem;
+  font-size: 0.89rem;
 }
 
 .stats-group-forecast .stat-card {
