@@ -15,12 +15,23 @@ create table if not exists public.entries (
   entry_date date not null,
   weight numeric not null check (weight > 0),
   calories integer,
+  steps integer check (steps >= 0),
   updated_at timestamptz not null default now(),
   unique (user_id, entry_date)
 );
 
+alter table public.entries add column if not exists steps integer check (steps >= 0);
+
 alter table public.profiles enable row level security;
 alter table public.entries enable row level security;
+
+drop policy if exists "profiles_select_own" on public.profiles;
+drop policy if exists "profiles_insert_own" on public.profiles;
+drop policy if exists "profiles_update_own" on public.profiles;
+drop policy if exists "entries_select_own" on public.entries;
+drop policy if exists "entries_insert_own" on public.entries;
+drop policy if exists "entries_update_own" on public.entries;
+drop policy if exists "entries_delete_own" on public.entries;
 
 create policy "profiles_select_own"
   on public.profiles for select

@@ -70,6 +70,7 @@ const normalizeEntries = (rawEntries) => {
     const date = toIsoDate(entry?.date)
     const weight = Number(entry?.weight)
     const calories = Number(entry?.calories)
+    const steps = Number(entry?.steps)
 
     if (!date || !Number.isFinite(weight) || weight <= 0) {
       return
@@ -77,11 +78,14 @@ const normalizeEntries = (rawEntries) => {
 
     const normalizedCalories =
       Number.isFinite(calories) && calories > 0 ? Math.round(calories) : null
+    const normalizedSteps =
+      Number.isFinite(steps) && steps >= 0 ? Math.round(steps) : null
 
     normalizedMap.set(date, {
       date,
       weight: Number(weight.toFixed(2)),
       calories: normalizedCalories,
+      steps: normalizedSteps,
     })
   })
 
@@ -128,11 +132,15 @@ const generateSyntheticEntries = (days = 140) => {
 
     const loggedCalories = maintenance + kcalDelta + randomNormal() * 140
     const hasCalories = Math.random() > 0.33
+    const hasSteps = Math.random() > 0.08
+    const loggedSteps =
+      7400 + randomNormal() * 1700 + clamp(-effectiveDelta * 5, -900, 900)
 
     synthetic.push({
       date: toIsoDate(date),
       weight: Number(observedWeight.toFixed(2)),
       calories: hasCalories ? Math.round(clamp(loggedCalories, 1100, 4200)) : null,
+      steps: hasSteps ? Math.round(clamp(loggedSteps, 1800, 22000)) : null,
     })
   }
 
@@ -225,6 +233,19 @@ const toOptionalPositiveNumber = (value) => {
   }
 
   return parsed
+}
+
+const toOptionalNonNegativeInteger = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null
+  }
+
+  return Math.round(parsed)
 }
 
 const getMaintenanceCalories = (weightKg, profile) => {
@@ -557,6 +578,7 @@ function App() {
     date: todayIso,
     weight: '',
     calories: '',
+    steps: '',
   })
   const [profile, setProfile] = useState(defaultProfile)
   const [showOlsComparison, setShowOlsComparison] = useState(false)
@@ -660,8 +682,36 @@ function App() {
         date: row.entry_date,
         weight: row.weight,
         calories: row.calories,
+        steps: row.steps,
       })),
     )
+
+  const loadCloudEntries = async (userId) => {
+    if (!supabase) {
+      return { data: [], error: null }
+    }
+
+    const withSteps = await supabase
+      .from('entries')
+      .select('entry_date, weight, calories, steps')
+      .eq('user_id', userId)
+      .order('entry_date', { ascending: true })
+
+    if (!withSteps.error) {
+      return withSteps
+    }
+
+    if (!String(withSteps.error.message ?? '').toLowerCase().includes('steps')) {
+      return withSteps
+    }
+
+    // Backward-compatible fallback when remote schema does not have steps yet.
+    return supabase
+      .from('entries')
+      .select('entry_date, weight, calories')
+      .eq('user_id', userId)
+      .order('entry_date', { ascending: true })
+  }
 
   const hydrateFromCloud = async (userId) => {
     if (!supabase) {
@@ -671,11 +721,7 @@ function App() {
     setCloudStatus('Syncing from cloud...')
 
     const [entriesRes, profileRes] = await Promise.all([
-      supabase
-        .from('entries')
-        .select('entry_date, weight, calories')
-        .eq('user_id', userId)
-        .order('entry_date', { ascending: true }),
+      loadCloudEntries(userId),
       supabase.from('profiles').select('age, height_cm, sex, target_weight').eq('user_id', userId).maybeSingle(),
     ])
 
@@ -716,13 +762,22 @@ function App() {
       entry_date: entry.date,
       weight: entry.weight,
       calories: entry.calories,
+      steps: entry.steps,
       updated_at: timestamp,
     }))
 
     if (entriesPayload.length > 0) {
-      const { error: entriesError } = await supabase
+      let { error: entriesError } = await supabase
         .from('entries')
         .upsert(entriesPayload, { onConflict: 'user_id,entry_date' })
+
+      if (entriesError && String(entriesError.message ?? '').toLowerCase().includes('steps')) {
+        const fallbackPayload = entriesPayload.map(({ steps: _ignored, ...item }) => item)
+        const fallbackResult = await supabase
+          .from('entries')
+          .upsert(fallbackPayload, { onConflict: 'user_id,entry_date' })
+        entriesError = fallbackResult.error
+      }
 
       if (entriesError) {
         throw entriesError
@@ -797,6 +852,7 @@ function App() {
         delta7d: null,
         avg: null,
         avgCalories: null,
+        avgSteps: null,
       }
     }
 
@@ -806,6 +862,11 @@ function App() {
     const avgCalories =
       withCalories.length > 0
         ? withCalories.reduce((sum, item) => sum + item.calories, 0) / withCalories.length
+        : null
+    const withSteps = entries.filter((item) => Number.isFinite(item.steps))
+    const avgSteps =
+      withSteps.length > 0
+        ? withSteps.reduce((sum, item) => sum + item.steps, 0) / withSteps.length
         : null
 
     let delta7d = null
@@ -820,6 +881,7 @@ function App() {
       delta7d,
       avg,
       avgCalories,
+      avgSteps,
     }
   }, [entries])
 
@@ -1149,16 +1211,32 @@ function App() {
     setError('')
 
     const date = toIsoDate(form.date)
-    const weight = Number(form.weight)
-    const calories = toOptionalPositiveNumber(form.calories)
+    const existingEntry = entries.find((item) => item.date === date)
+    const hasWeightInput = form.weight !== ''
+    const parsedWeight = Number(form.weight)
+    const calories =
+      form.calories === ''
+        ? existingEntry?.calories ?? null
+        : toOptionalPositiveNumber(form.calories)
+    const steps =
+      form.steps === ''
+        ? existingEntry?.steps ?? null
+        : toOptionalNonNegativeInteger(form.steps)
 
     if (!date) {
       setError('Invalid date. Please choose a valid day.')
       return
     }
 
+    if (hasWeightInput && (!Number.isFinite(parsedWeight) || parsedWeight <= 0)) {
+      setError('If entered, weight must be greater than 0.')
+      return
+    }
+
+    const weight = hasWeightInput ? parsedWeight : existingEntry?.weight
+
     if (!Number.isFinite(weight) || weight <= 0) {
-      setError('Weight must be greater than 0.')
+      setError('Weight is required for a new date. For existing dates, leave weight empty to keep it unchanged.')
       return
     }
 
@@ -1170,6 +1248,7 @@ function App() {
           date,
           weight,
           calories,
+          steps,
         },
       ])
     })
@@ -1178,6 +1257,7 @@ function App() {
       ...previous,
       weight: '',
       calories: '',
+      steps: '',
     }))
   }
 
@@ -1369,6 +1449,9 @@ function App() {
 
       <section className="panel">
         <h2>Add New Entry</h2>
+        <p className="backup-note">
+          Tip: if this date already exists, you can leave weight empty and update only calories or steps.
+        </p>
         <form className="entry-form" onSubmit={submitEntry}>
           <label>
             Date
@@ -1405,6 +1488,20 @@ function App() {
               value={form.calories}
               onChange={(event) =>
                 setForm((previous) => ({ ...previous, calories: event.target.value }))
+              }
+            />
+          </label>
+
+          <label>
+            Steps (optional)
+            <input
+              type="number"
+              step="1"
+              min="0"
+              placeholder="e.g. 8200"
+              value={form.steps}
+              onChange={(event) =>
+                setForm((previous) => ({ ...previous, steps: event.target.value }))
               }
             />
           </label>
@@ -1530,6 +1627,18 @@ function App() {
         </article>
 
         <article className="stat-card">
+          <h3>Avg Daily Steps</h3>
+          <p className="value">
+            {stats.avgSteps === null ? '--' : `${Math.round(stats.avgSteps).toLocaleString()} steps`}
+          </p>
+          <small>
+            {stats.avgSteps === null
+              ? 'Log steps to track activity alongside weight changes'
+              : 'Based on entries that include step count'}
+          </small>
+        </article>
+
+        <article className="stat-card">
           <h3>Model Quality (7-day Backtest)</h3>
           <p className="value">
             {modelBacktest ? `${modelBacktest.windows} windows` : '--'}
@@ -1643,6 +1752,10 @@ function App() {
                       {Number.isFinite(entry.calories)
                         ? `${Math.round(entry.calories)} kcal`
                         : 'Calories not logged'}
+                      {' • '}
+                      {Number.isFinite(entry.steps)
+                        ? `${Math.round(entry.steps).toLocaleString()} steps`
+                        : 'Steps not logged'}
                     </small>
                   </div>
                   <strong>{entry.weight.toFixed(1)} kg</strong>
