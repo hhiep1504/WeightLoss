@@ -261,6 +261,41 @@ const estimateDailyCalorieEffect = (entries, profile) => {
   return clamp(kgEffectPerDay, -0.08, 0.08)
 }
 
+const estimateDailyStepEffect = (entries) => {
+  const recentWithSteps = entries
+    .slice(-21)
+    .filter(
+      (entry) =>
+        Number.isFinite(entry.steps) && entry.steps >= 1000 && entry.steps <= 50000,
+    )
+
+  if (recentWithSteps.length < 10) {
+    return 0
+  }
+
+  const avgSteps =
+    recentWithSteps.reduce((sum, entry) => sum + entry.steps, 0) /
+    recentWithSteps.length
+  const stepsVariance =
+    recentWithSteps.reduce((sum, entry) => {
+      const delta = entry.steps - avgSteps
+      return sum + delta * delta
+    }, 0) / recentWithSteps.length
+  const stepsStd = Math.sqrt(stepsVariance)
+
+  // Skip step effect if logs are too unstable across recent days.
+  if (!Number.isFinite(stepsStd) || stepsStd > 3500) {
+    return 0
+  }
+
+  // Approximation: ~0.045 kcal per step for moderate walking.
+  const kcalFromStepsPerDay = (avgSteps - 7000) * 0.045
+  // More steps than baseline should reduce weight trend (negative kg/day).
+  const kgEffectPerDay = -kcalFromStepsPerDay / 7700
+
+  return clamp(kgEffectPerDay, -0.03, 0.03)
+}
+
 const buildHybridForecast = (entries, profile) => {
   if (entries.length < 4) {
     return {
@@ -268,6 +303,7 @@ const buildHybridForecast = (entries, profile) => {
       next90: [],
       trendPerDay: null,
       calorieEffectPerDay: null,
+      stepEffectPerDay: null,
       predicted30d: null,
       predicted30dLow95: null,
       predicted30dHigh95: null,
@@ -302,7 +338,12 @@ const buildHybridForecast = (entries, profile) => {
       : 0.06
   const sigma = Math.max(0.15, Math.sqrt(mse))
   const calorieEffectPerDay = estimateDailyCalorieEffect(entries, profile)
-  const totalTrendPerDay = clamp(boundedTrend + calorieEffectPerDay, -0.12, 0.12)
+  const stepEffectPerDay = estimateDailyStepEffect(entries)
+  const totalTrendPerDay = clamp(
+    boundedTrend + calorieEffectPerDay + stepEffectPerDay,
+    -0.12,
+    0.12,
+  )
   const weeklySeasonality = buildWeeklySeasonality(entries)
   const trendDamping = 0.985
 
@@ -336,6 +377,7 @@ const buildHybridForecast = (entries, profile) => {
     next90,
     trendPerDay: totalTrendPerDay,
     calorieEffectPerDay,
+    stepEffectPerDay,
     predicted30d: Number(predicted30d.toFixed(2)),
     predicted30dLow95: Number((predicted30d - 1.96 * std30).toFixed(2)),
     predicted30dHigh95: Number((predicted30d + 1.96 * std30).toFixed(2)),
@@ -347,6 +389,8 @@ const buildOlsForecast = (entries) => {
     return {
       next90: [],
       trendPerDay: null,
+      calorieEffectPerDay: null,
+      stepEffectPerDay: null,
       predicted30d: null,
     }
   }
@@ -357,6 +401,8 @@ const buildOlsForecast = (entries) => {
     return {
       next90: [],
       trendPerDay: null,
+      calorieEffectPerDay: null,
+      stepEffectPerDay: null,
       predicted30d: null,
     }
   }
@@ -378,6 +424,8 @@ const buildOlsForecast = (entries) => {
   return {
     next90,
     trendPerDay: boundedSlope,
+    calorieEffectPerDay: null,
+    stepEffectPerDay: null,
     predicted30d: Number((latestWeight + boundedSlope * 30).toFixed(2)),
   }
 }
@@ -387,6 +435,8 @@ const buildMechanisticForecast = (entries, profile) => {
     return {
       next90: [],
       trendPerDay: null,
+      calorieEffectPerDay: null,
+      stepEffectPerDay: null,
       predicted30d: null,
     }
   }
@@ -412,6 +462,8 @@ const buildMechanisticForecast = (entries, profile) => {
   }
 
   intakeEstimate = clamp(intakeEstimate, 900, 6000)
+  const calorieEffectPerDay = clamp((intakeEstimate - maintenanceBase) / 7700, -0.08, 0.08)
+  const stepEffectPerDay = estimateDailyStepEffect(entries)
 
   const next90 = []
   let simulatedWeight = latestWeight
@@ -427,7 +479,7 @@ const buildMechanisticForecast = (entries, profile) => {
     const adaptation = Math.max(0, (latestWeight - simulatedWeight) * adaptationPerKg)
     const effectiveMaintenance = maintenanceBase - adaptation
     const kcalDelta = effectiveIntake - effectiveMaintenance
-    const dayDeltaKg = clamp(kcalDelta / 7700, -0.16, 0.16)
+    const dayDeltaKg = clamp(kcalDelta / 7700 + stepEffectPerDay, -0.16, 0.16)
 
     simulatedWeight += dayDeltaKg
 
@@ -445,6 +497,8 @@ const buildMechanisticForecast = (entries, profile) => {
   return {
     next90,
     trendPerDay: trendPerDay === null ? null : Number(trendPerDay.toFixed(4)),
+    calorieEffectPerDay,
+    stepEffectPerDay,
     predicted30d: next90[29] ? next90[29].weight : null,
   }
 }
@@ -545,9 +599,26 @@ function App() {
   const [profileLoaded, setProfileLoaded] = useState(false)
   const [cloudHydrated, setCloudHydrated] = useState(false)
   const [error, setError] = useState('')
+  const [historyError, setHistoryError] = useState('')
   const [backupMessage, setBackupMessage] = useState('')
+  const [editingDate, setEditingDate] = useState(null)
+  const [recentlySavedDate, setRecentlySavedDate] = useState(null)
+  const [editingRow, setEditingRow] = useState({
+    weight: '',
+    calories: '',
+    steps: '',
+  })
   const fileInputRef = useRef(null)
   const syncTimerRef = useRef(null)
+  const saveHighlightTimerRef = useRef(null)
+
+  useEffect(() => {
+    return () => {
+      if (saveHighlightTimerRef.current) {
+        clearTimeout(saveHighlightTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -875,6 +946,7 @@ function App() {
           predicted30dLow95: null,
           predicted30dHigh95: null,
           calorieEffectPerDay: null,
+          stepEffectPerDay: null,
           label: 'OLS baseline',
         }
       : activeModelKey === 'mechanistic'
@@ -884,7 +956,8 @@ function App() {
             predicted30d: mechanisticForecast.predicted30d,
             predicted30dLow95: null,
             predicted30dHigh95: null,
-            calorieEffectPerDay: null,
+            calorieEffectPerDay: mechanisticForecast.calorieEffectPerDay,
+            stepEffectPerDay: mechanisticForecast.stepEffectPerDay,
             label: 'Dynamic energy balance',
           }
         : {
@@ -1227,6 +1300,79 @@ function App() {
 
   const removeEntry = (date) => {
     setEntries((previous) => previous.filter((entry) => entry.date !== date))
+  }
+
+  const startInlineEdit = (entry) => {
+    setHistoryError('')
+    setEditingDate(entry.date)
+    setEditingRow({
+      weight: String(entry.weight ?? ''),
+      calories:
+        Number.isFinite(entry.calories) && entry.calories !== null
+          ? String(entry.calories)
+          : '',
+      steps:
+        Number.isFinite(entry.steps) && entry.steps !== null
+          ? String(entry.steps)
+          : '',
+    })
+  }
+
+  const cancelInlineEdit = () => {
+    setEditingDate(null)
+    setEditingRow({ weight: '', calories: '', steps: '' })
+    setHistoryError('')
+  }
+
+  const saveInlineEdit = (date) => {
+    const parsedWeight = Number(editingRow.weight)
+    if (!Number.isFinite(parsedWeight) || parsedWeight <= 0) {
+      setHistoryError('Weight must be greater than 0.')
+      return
+    }
+
+    const calories = toOptionalPositiveNumber(editingRow.calories)
+    const steps = toOptionalNonNegativeInteger(editingRow.steps)
+
+    setEntries((previous) =>
+      normalizeEntries(
+        previous.map((entry) =>
+          entry.date === date
+            ? {
+                ...entry,
+                weight: parsedWeight,
+                calories,
+                steps,
+              }
+            : entry,
+        ),
+      ),
+    )
+
+    setEditingDate(null)
+    setEditingRow({ weight: '', calories: '', steps: '' })
+    setHistoryError('')
+    setRecentlySavedDate(date)
+
+    if (saveHighlightTimerRef.current) {
+      clearTimeout(saveHighlightTimerRef.current)
+    }
+
+    saveHighlightTimerRef.current = setTimeout(() => {
+      setRecentlySavedDate((previous) => (previous === date ? null : previous))
+    }, 1800)
+  }
+
+  const handleInlineKeyDown = (event, date) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      saveInlineEdit(date)
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelInlineEdit()
+    }
   }
 
   const sendMagicLink = async () => {
@@ -1599,6 +1745,11 @@ function App() {
               ? 'Add profile + calories to enable calorie effect'
               : `Calorie effect: ${forecast.calorieEffectPerDay > 0 ? '+' : ''}${forecast.calorieEffectPerDay.toFixed(3)} kg/day`}
           </small>
+          <small>
+            {forecast.stepEffectPerDay === null
+              ? 'Add steps for activity effect'
+              : `Step effect: ${forecast.stepEffectPerDay > 0 ? '+' : ''}${forecast.stepEffectPerDay.toFixed(3)} kg/day`}
+          </small>
         </article>
 
         <article className="stat-card">
@@ -1704,32 +1855,116 @@ function App() {
         {entries.length === 0 ? (
           <p className="empty">No entries yet. Add your first weight record above.</p>
         ) : (
-          <ul className="entry-list">
-            {entries
-              .slice()
-              .reverse()
-              .map((entry) => (
-                <li key={entry.date}>
-                  <div className="entry-meta">
-                    <span>{formatDate(entry.date)}</span>
-                    <small>
-                      {Number.isFinite(entry.calories)
-                        ? `${Math.round(entry.calories)} kcal`
-                        : 'Calories not logged'}
-                      {' • '}
-                      {Number.isFinite(entry.steps)
-                        ? `${Math.round(entry.steps).toLocaleString()} steps`
-                        : 'Steps not logged'}
-                    </small>
-                  </div>
-                  <strong>{entry.weight.toFixed(1)} kg</strong>
-                  <button type="button" onClick={() => removeEntry(entry.date)}>
-                    Delete
-                  </button>
-                </li>
-              ))}
-          </ul>
+          <div className="history-table-wrap">
+            <table className="history-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Weight (kg)</th>
+                  <th>Calories (kcal)</th>
+                  <th>Steps</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries
+                  .slice()
+                  .reverse()
+                  .map((entry) => (
+                    <tr
+                      key={entry.date}
+                      className={recentlySavedDate === entry.date ? 'history-row-saved' : ''}
+                    >
+                      <td>{formatDate(entry.date)}</td>
+                      {editingDate === entry.date ? (
+                        <>
+                          <td>
+                            <input
+                              className="history-input"
+                              type="number"
+                              step="0.1"
+                              min="1"
+                              value={editingRow.weight}
+                              onChange={(event) =>
+                                setEditingRow((previous) => ({
+                                  ...previous,
+                                  weight: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => handleInlineKeyDown(event, entry.date)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="history-input"
+                              type="number"
+                              step="1"
+                              min="0"
+                              value={editingRow.calories}
+                              onChange={(event) =>
+                                setEditingRow((previous) => ({
+                                  ...previous,
+                                  calories: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => handleInlineKeyDown(event, entry.date)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="history-input"
+                              type="number"
+                              step="1"
+                              min="0"
+                              value={editingRow.steps}
+                              onChange={(event) =>
+                                setEditingRow((previous) => ({
+                                  ...previous,
+                                  steps: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => handleInlineKeyDown(event, entry.date)}
+                            />
+                          </td>
+                          <td className="history-actions">
+                            <button type="button" onClick={() => saveInlineEdit(entry.date)}>
+                              Save
+                            </button>
+                            <button type="button" onClick={cancelInlineEdit}>
+                              Cancel
+                            </button>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td>{entry.weight.toFixed(1)}</td>
+                          <td>
+                            {Number.isFinite(entry.calories)
+                              ? Math.round(entry.calories)
+                              : '--'}
+                          </td>
+                          <td>
+                            {Number.isFinite(entry.steps)
+                              ? Math.round(entry.steps).toLocaleString()
+                              : '--'}
+                          </td>
+                          <td className="history-actions">
+                            <button type="button" onClick={() => startInlineEdit(entry)}>
+                              Edit
+                            </button>
+                            <button type="button" onClick={() => removeEntry(entry.date)}>
+                              Delete
+                            </button>
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
         )}
+        {historyError ? <p className="error">{historyError}</p> : null}
       </section>
     </div>
   )

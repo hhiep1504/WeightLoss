@@ -123,7 +123,7 @@
 }
 
 .entry-form button,
-.entry-list button {
+.history-table button {
   border: 0;
   border-radius: 10px;
   font: inherit;
@@ -274,43 +274,77 @@
   color: #64748b;
 }
 
-.entry-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.55rem;
+
+.history-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
 }
 
-.entry-list li {
-  border: 1px solid #e2e8f0;
-  border-radius: 11px;
-  padding: 0.58rem 0.74rem;
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 0.8rem;
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.history-table thead {
+  background: #f8fafc;
+}
+
+.history-table th,
+.history-table td {
+  text-align: left;
+  padding: 0.66rem 0.78rem;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.history-table th {
+  color: #334155;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.history-table td {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.history-input {
+  width: 100%;
+  max-width: 140px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.34rem 0.46rem;
+  font: inherit;
+}
+
+.history-actions {
+  display: flex;
+  gap: 0.4rem;
   align-items: center;
 }
 
-.entry-list span {
-  color: #334155;
+.history-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
-.entry-meta {
-  display: grid;
-  gap: 0.14rem;
+.history-row-saved td {
+  background: #ecfdf5;
+  animation: savedRowFade 1.8s ease-out;
 }
 
-.entry-meta small {
-  color: #64748b;
-  font-size: 0.8rem;
+@keyframes savedRowFade {
+  from {
+    background: #bbf7d0;
+  }
+  to {
+    background: #ecfdf5;
+  }
 }
 
-.entry-list strong {
-  color: #0f172a;
-}
-
-.entry-list button {
+.history-table button {
   background: #fee2e2;
   color: #991b1b;
   padding: 0.36rem 0.65rem;
@@ -318,7 +352,7 @@
   font-weight: 700;
 }
 
-.entry-list button:hover {
+.history-table button:hover {
   background: #fecaca;
 }
 
@@ -330,14 +364,6 @@
 
   .hero {
     padding: 1.3rem;
-  }
-
-  .entry-list li {
-    grid-template-columns: 1fr auto;
-  }
-
-  .entry-list button {
-    grid-column: 1 / -1;
   }
 
   .cloud-auth-grid {
